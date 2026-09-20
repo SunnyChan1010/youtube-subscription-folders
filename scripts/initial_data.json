@@ -1,0 +1,36 @@
+{
+  "folders": [
+    {
+      "id": "folder_tech",
+      "name": "💻 科技 3C (Tech & AI)",
+      "description": "科技最新資訊、AI 工具、軟硬體評測",
+      "channels": []
+    },
+    {
+      "id": "folder_gaming",
+      "name": "🎮 電玩遊戲 (Gaming)",
+      "description": "遊戲實況、新遊試玩、遊戲攻略與精華",
+      "channels": []
+    },
+    {
+      "id": "folder_entertainment",
+      "name": "🎬 影視娛樂 (Cinema & Movies)",
+      "description": "電影影評、電視劇、流行影視解說",
+      "channels": []
+    },
+    {
+      "id": "folder_knowledge",
+      "name": "🧠 知識成長 (Productivity & Science)",
+      "description": "科普知識、思維學習、生產力與個人成長",
+      "channels": []
+    },
+    {
+      "id": "folder_music",
+      "name": "🎵 音樂生活 (Music & Lifestyle)",
+      "description": "音樂串流、生活放鬆、日常休閒",
+      "channels": []
+    }
+  ],
+  "channels": [],
+  "uncategorizedChannels": []
+}
