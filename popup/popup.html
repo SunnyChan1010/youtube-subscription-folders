@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube 訂閱分組</title>
+  <link rel="stylesheet" href="../styles/popup.css">
+</head>
+<body>
+  <header class="popup-header">
+    <div class="popup-title">
+      <span class="popup-title-icon">📁</span>
+      <span>YouTube 訂閱分組</span>
+    </div>
+    <div class="popup-actions">
+      <button class="icon-btn" id="btn-open-feed" title="開啟 YouTube 訂閱動態牆">📺</button>
+      <button class="icon-btn" id="btn-open-options" title="管理分組與設定">⚙️</button>
+    </div>
+  </header>
+
+  <div class="search-box-container">
+    <input type="text" class="search-input" id="search-input" placeholder="🔍 搜尋頻道或分組..." />
+  </div>
+
+  <div class="stats-bar">
+    <span id="stats-text">載入中...</span>
+    <label class="watched-toggle-label" title="在動態牆自動隱藏已看過的影片">
+      <input type="checkbox" id="chk-hide-watched" />
+      <span>隱藏已看</span>
+    </label>
+  </div>
+
+  <main class="folder-list-container" id="folder-list">
+    <!-- Folder items rendered dynamically -->
+  </main>
+
+  <footer class="popup-footer">
+    <button class="btn-primary" id="btn-add-folder">
+      <span>➕</span>
+      <span>新增分組</span>
+    </button>
+    <button class="btn-secondary" id="btn-manage-all">
+      <span>完整管理</span>
+    </button>
+  </footer>
+
+  <script src="../scripts/initial_data.js"></script>
+  <script src="../scripts/storage.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
