@@ -1,0 +1,508 @@
+/* ==========================================================================
+   YouTube Subscription Folders - Content Styles
+   Designed for YouTube Desktop (Light & Dark Theme Compatible)
+   ========================================================================== */
+
+/* Elements hidden by filter */
+.yt-org-hidden {
+  display: none !important;
+}
+
+.yt-org-hidden-watched {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   1. Left Sidebar / Guide Section
+   -------------------------------------------------------------------------- */
+#yt-org-sidebar-section {
+  padding: 8px 0;
+  border-top: 1px solid var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.1));
+  border-bottom: 1px solid var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.1));
+  margin: 6px 0;
+  font-family: "Roboto", "Arial", sans-serif;
+  color: var(--yt-spec-text-primary, #0f0f0f);
+}
+
+html[dark] #yt-org-sidebar-section {
+  color: var(--yt-spec-text-primary, #f1f1f1);
+}
+
+.yt-org-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px 8px 24px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+}
+
+.yt-org-sidebar-header:hover {
+  background-color: var(--yt-spec-badge-chip-background, rgba(0, 0, 0, 0.05));
+  border-radius: 8px;
+}
+
+html[dark] .yt-org-sidebar-header:hover {
+  background-color: var(--yt-spec-badge-chip-background, rgba(255, 255, 255, 0.08));
+}
+
+.yt-org-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.yt-org-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.yt-org-btn-icon {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 50%;
+  color: inherit;
+  opacity: 0.7;
+  font-size: 14px;
+  transition: opacity 0.2s, background-color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.yt-org-btn-icon:hover {
+  opacity: 1;
+  background-color: var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.1));
+}
+
+.yt-org-folder-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.yt-org-folder-item {
+  margin: 1px 0;
+}
+
+.yt-org-folder-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 16px 6px 24px;
+  border-radius: 10px;
+  margin: 0 12px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.15s ease;
+  user-select: none;
+  gap: 10px;
+}
+
+.yt-org-folder-row:hover {
+  background-color: var(--yt-spec-badge-chip-background, rgba(0, 0, 0, 0.05));
+}
+
+html[dark] .yt-org-folder-row:hover {
+  background-color: var(--yt-spec-badge-chip-background, rgba(255, 255, 255, 0.08));
+}
+
+.yt-org-folder-row.yt-org-active {
+  background-color: rgba(255, 0, 51, 0.15);
+  font-weight: 600;
+}
+
+.yt-org-folder-icon {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.yt-org-folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+}
+
+.yt-org-folder-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--yt-spec-badge-chip-background, rgba(0, 0, 0, 0.08));
+  color: var(--yt-spec-text-secondary, #606060);
+  font-weight: 500;
+}
+
+html[dark] .yt-org-folder-badge {
+  background: var(--yt-spec-badge-chip-background, rgba(255, 255, 255, 0.12));
+  color: var(--yt-spec-text-secondary, #aaaaaa);
+}
+
+.yt-org-folder-chevron {
+  font-size: 10px;
+  transition: transform 0.2s ease;
+  opacity: 0.6;
+}
+
+.yt-org-folder-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.yt-org-channels-sublist {
+  list-style: none;
+  padding: 2px 0 4px 0;
+  margin: 0;
+  display: none;
+}
+
+.yt-org-channels-sublist.expanded {
+  display: block;
+}
+
+.yt-org-channel-item {
+  display: flex;
+  align-items: center;
+  padding: 5px 16px 5px 44px;
+  margin: 0 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  font-size: 13px;
+  gap: 10px;
+  transition: background-color 0.15s;
+}
+
+.yt-org-channel-item:hover {
+  background-color: var(--yt-spec-badge-chip-background, rgba(0, 0, 0, 0.05));
+}
+
+html[dark] .yt-org-channel-item:hover {
+  background-color: var(--yt-spec-badge-chip-background, rgba(255, 255, 255, 0.08));
+}
+
+.yt-org-channel-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.yt-org-channel-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   2. Subscriptions Feed Top Filter Chip Bar
+   -------------------------------------------------------------------------- */
+#yt-org-feed-filter-container {
+  display: block !important;
+  width: 100% !important;
+  padding: 10px 16px 14px 16px !important;
+  box-sizing: border-box !important;
+  background: var(--yt-spec-base-background, #0f0f0f) !important;
+  border-bottom: 1px solid var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.1)) !important;
+  margin-bottom: 16px !important;
+  z-index: 100 !important;
+  position: relative !important;
+}
+
+.yt-org-feed-filter-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: 100%;
+}
+
+.yt-org-chips-scroll {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding: 4px 2px;
+  flex: 1;
+}
+
+.yt-org-chips-scroll::-webkit-scrollbar {
+  height: 5px;
+}
+
+.yt-org-chips-scroll::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.4);
+  border-radius: 4px;
+}
+
+.yt-org-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 18px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  background: var(--yt-spec-badge-chip-background, rgba(255, 255, 255, 0.08));
+  color: var(--yt-spec-text-primary, #f1f1f1);
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.1));
+  transition: all 0.2s ease;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.yt-org-chip:hover {
+  background: var(--yt-spec-badge-chip-background, rgba(255, 255, 255, 0.16));
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.yt-org-chip.active {
+  background: #ff0033 !important;
+  color: #ffffff !important;
+  border-color: #ff0033 !important;
+  font-weight: 600;
+}
+
+.yt-org-chip-badge {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.yt-org-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.yt-org-toggle-watched-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 18px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.2));
+  background: transparent;
+  color: var(--yt-spec-text-primary, #f1f1f1);
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.yt-org-toggle-watched-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.yt-org-toggle-watched-btn.active {
+  background: #ff0033 !important;
+  color: #ffffff !important;
+  border-color: #ff0033 !important;
+}
+
+/* --------------------------------------------------------------------------
+   3. Channel Page Quick Tagger Button & Dropdown
+   -------------------------------------------------------------------------- */
+.yt-org-channel-tagger-container {
+  display: inline-flex !important;
+  position: relative !important;
+  align-items: center !important;
+  margin: 0 8px !important;
+  vertical-align: middle !important;
+  z-index: 1000 !important;
+}
+
+.yt-org-channel-tagger-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 0 16px !important;
+  height: 36px !important;
+  border-radius: 18px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #f1f1f1 !important;
+  cursor: pointer !important;
+  transition: all 0.2s !important;
+  user-select: none !important;
+  white-space: nowrap !important;
+}
+
+.yt-org-channel-tagger-btn:hover {
+  background: rgba(255, 255, 255, 0.2) !important;
+  border-color: rgba(255, 255, 255, 0.35) !important;
+}
+
+.yt-org-channel-tagger-btn.has-folders {
+  background: rgba(255, 0, 51, 0.18) !important;
+  border-color: #ff0033 !important;
+  color: #ff6b6b !important;
+  font-weight: 600 !important;
+}
+
+/* Global Floating Dropdown Menu (Fixed to body to prevent overflow clipping) */
+.yt-org-floating-dropdown {
+  position: fixed !important;
+  width: 290px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: #212121;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+  padding: 8px 0;
+  z-index: 999999999 !important;
+  color: #f1f1f1;
+  display: none;
+  font-family: "Roboto", "Arial", sans-serif;
+}
+
+.yt-org-floating-dropdown.show {
+  display: block;
+}
+
+.yt-org-dropdown-header {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #aaaaaa;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.yt-org-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  cursor: pointer;
+  font-size: 13.5px;
+  transition: background-color 0.15s;
+  user-select: none;
+}
+
+.yt-org-dropdown-item:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.yt-org-dropdown-item input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: #ff0033;
+  width: 16px;
+  height: 16px;
+}
+
+.yt-org-dropdown-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Feed Empty State */
+#yt-org-feed-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+  color: #aaaaaa;
+  font-size: 15px;
+  gap: 14px;
+  width: 100%;
+}
+
+.yt-org-empty-reset-btn {
+  background: #ff0033;
+  color: #ffffff;
+  border: none;
+  border-radius: 18px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.yt-org-empty-reset-btn:hover {
+  background: #cc0000;
+}
+
+/* Sync Banner on /feed/channels */
+#yt-org-sync-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(90deg, #1f1f1f, #282828);
+  border: 1px solid rgba(255, 0, 51, 0.4);
+  border-radius: 12px;
+  padding: 12px 20px;
+  margin: 16px 24px;
+  color: #f1f1f1;
+  font-size: 14px;
+  z-index: 50;
+  gap: 16px;
+}
+
+.yt-org-sync-btn {
+  background: #ff0033;
+  color: #fff;
+  border: none;
+  border-radius: 16px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.yt-org-sync-btn:hover {
+  background: #cc0000;
+}
+
+/* Toast */
+.yt-org-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: #282828;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 12px 20px;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 10000000;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.25s, transform 0.25s;
+  pointer-events: none;
+}
+
+.yt-org-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
