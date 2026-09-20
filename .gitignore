@@ -1,0 +1,10 @@
+# Logs and temporary files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# User personal data backups
+*.local.json
+personal_data/
+organized_subscriptions.json
