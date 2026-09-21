@@ -52,6 +52,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const progressModalBtnCancel = document.getElementById('progress-modal-btn-cancel');
   let isSubscribeAborted = false;
 
+  // Unsubscribe Confirmation Modal
+  const unsubscribeConfirmModal = document.getElementById('unsubscribe-confirm-modal');
+  const unsubBtnSelectAll = document.getElementById('unsub-btn-select-all');
+  const unsubBtnDeselectAll = document.getElementById('unsub-btn-deselect-all');
+  const unsubSelectedCounter = document.getElementById('unsub-selected-counter');
+  const unsubChannelsListEl = document.getElementById('unsub-channels-list');
+  const unsubModalBtnSkip = document.getElementById('unsub-modal-btn-skip');
+  const unsubModalBtnConfirm = document.getElementById('unsub-modal-btn-confirm');
+
   async function loadData() {
     allFolders = await YTFolderStorage.getFolders();
     allChannels = await YTFolderStorage.getChannels();
@@ -439,6 +448,120 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
+  /**
+   * Prompts user with a modal to select which redundant channels to unsubscribe from
+   */
+  function promptUnsubscribeSelection(redundantChannels) {
+    return new Promise((resolve) => {
+      if (!unsubscribeConfirmModal || !unsubChannelsListEl) {
+        resolve([]);
+        return;
+      }
+
+      unsubChannelsListEl.innerHTML = '';
+      const defaultAvatar = 'https://www.gstatic.com/youtube/img/creator/avatar/default_avatar_72.png';
+
+      // Default: select all
+      const selectedMap = new Map();
+      redundantChannels.forEach((ch, idx) => {
+        const key = ch.id || ch.handle || `ch_${idx}`;
+        selectedMap.set(key, true);
+      });
+
+      function updateUI() {
+        let count = 0;
+        for (const val of selectedMap.values()) {
+          if (val) count++;
+        }
+        if (unsubSelectedCounter) {
+          unsubSelectedCounter.textContent = `已選擇 ${count} / ${redundantChannels.length} 個頻道`;
+        }
+        if (unsubModalBtnConfirm) {
+          unsubModalBtnConfirm.textContent = `確認取消所選訂閱 (${count})`;
+          unsubModalBtnConfirm.disabled = count === 0;
+          unsubModalBtnConfirm.style.opacity = count === 0 ? '0.5' : '1';
+        }
+      }
+
+      redundantChannels.forEach((ch, idx) => {
+        const row = document.createElement('div');
+        row.className = 'unsub-channel-item';
+        const chKey = ch.id || ch.handle || `ch_${idx}`;
+        const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : (ch.id ? `https://www.youtube.com/channel/${ch.id}` : '#');
+
+        row.innerHTML = `
+          <input type="checkbox" class="unsub-channel-checkbox" id="unsub-chk-${idx}" checked />
+          <img class="unsub-channel-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
+          <div class="unsub-channel-info">
+            <a class="unsub-channel-name" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${ch.name || ch.handle || ch.id}</a>
+            <div class="unsub-channel-handle">${ch.handle ? ch.handle : (ch.id || '')}</div>
+          </div>
+        `;
+
+        const checkbox = row.querySelector('.unsub-channel-checkbox');
+        checkbox.onchange = () => {
+          selectedMap.set(chKey, checkbox.checked);
+          updateUI();
+        };
+
+        unsubChannelsListEl.appendChild(row);
+      });
+
+      if (unsubBtnSelectAll) {
+        unsubBtnSelectAll.onclick = () => {
+          redundantChannels.forEach((ch, idx) => {
+            selectedMap.set(ch.id || ch.handle || `ch_${idx}`, true);
+            const el = document.getElementById(`unsub-chk-${idx}`);
+            if (el) el.checked = true;
+          });
+          updateUI();
+        };
+      }
+
+      if (unsubBtnDeselectAll) {
+        unsubBtnDeselectAll.onclick = () => {
+          redundantChannels.forEach((ch, idx) => {
+            selectedMap.set(ch.id || ch.handle || `ch_${idx}`, false);
+            const el = document.getElementById(`unsub-chk-${idx}`);
+            if (el) el.checked = false;
+          });
+          updateUI();
+        };
+      }
+
+      function cleanupAndClose(result) {
+        unsubscribeConfirmModal.classList.remove('show');
+        if (unsubModalBtnConfirm) unsubModalBtnConfirm.onclick = null;
+        if (unsubModalBtnSkip) unsubModalBtnSkip.onclick = null;
+        window.removeEventListener('keydown', onKeyDown);
+        resolve(result);
+      }
+
+      function onKeyDown(e) {
+        if (e.key === 'Escape') {
+          cleanupAndClose([]);
+        }
+      }
+      window.addEventListener('keydown', onKeyDown);
+
+      if (unsubModalBtnConfirm) {
+        unsubModalBtnConfirm.onclick = () => {
+          const selected = redundantChannels.filter((ch, idx) => selectedMap.get(ch.id || ch.handle || `ch_${idx}`));
+          cleanupAndClose(selected);
+        };
+      }
+
+      if (unsubModalBtnSkip) {
+        unsubModalBtnSkip.onclick = () => {
+          cleanupAndClose([]);
+        };
+      }
+
+      updateUI();
+      unsubscribeConfirmModal.classList.add('show');
+    });
+  }
+
   importBtnConfirm.onclick = async () => {
     const content = importTextarea.value.trim();
     if (!content) {
@@ -451,6 +574,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const optDedupCategorized = document.getElementById('import-opt-dedup-categorized')?.checked !== false;
     const optSingleFolder = document.getElementById('import-opt-single-folder')?.checked !== false;
     const optAutoSubscribe = document.getElementById('import-opt-auto-subscribe')?.checked !== false;
+    const optCheckUnsubscribed = document.getElementById('import-opt-check-unsubscribed')?.checked !== false;
 
     try {
       // 1. First import and deduplicate data into storage (automatically adding them to folders)
@@ -463,9 +587,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       importModal.classList.remove('show');
 
       let autoSubSummary = '';
+      let unsubSummary = '';
 
-      // 2. If Auto-Subscribe is enabled, compare with YouTube subscriptions and subscribe missing channels
-      if (optAutoSubscribe && res.channelsList && res.channelsList.length > 0) {
+      // 2. If Auto-Subscribe or Check-Unsubscribed is enabled, compare with YouTube subscriptions
+      const shouldCheckSubs = (optAutoSubscribe || optCheckUnsubscribed);
+      if (shouldCheckSubs) {
         if (subscribeProgressModal) {
           isSubscribeAborted = false;
           progressModalTitle.textContent = '🔔 正在比對 YouTube 訂閱狀態';
@@ -476,57 +602,121 @@ document.addEventListener('DOMContentLoaded', async () => {
 
           progressModalBtnCancel.onclick = () => {
             isSubscribeAborted = true;
-            progressModalChannelName.textContent = '正在取消/中斷訂閱...';
+            progressModalChannelName.textContent = '正在取消/中斷處理...';
           };
         }
 
         try {
           // Compare against live YouTube subscriptions
-          const cmp = await YTSubscriptionService.compareSubscriptions(res.channelsList);
+          const cmp = await YTSubscriptionService.compareSubscriptions(res.channelsList || []);
 
           if (!cmp.isLoggedIn) {
-            autoSubSummary = `\n• YouTube 訂閱同步：未檢測到登入狀態，頻道已全部成功加入分組，但未能自動於 YouTube 訂閱（登入後可使用「一鍵同步」）。`;
-          } else if (cmp.unsubscribed.length === 0) {
-            autoSubSummary = `\n• YouTube 訂閱同步：備份內所有頻道 (${cmp.subscribed.length} 個) 均已在 YouTube 訂閱中。`;
+            autoSubSummary = `\n• YouTube 訂閱同步：未檢測到登入狀態，頻道已全部成功加入分組，但未能自動於 YouTube 同步訂閱（登入後可使用「一鍵同步」）。`;
           } else {
-            // Unsubscribed channels exist -> trigger auto-subscribe!
-            progressModalTitle.textContent = `🔔 正在自動加入 YouTube 訂閱 (${cmp.unsubscribed.length} 個未訂閱頻道)`;
-            progressModalBar.style.width = '0%';
+            // --- Part A: Auto-subscribe to missing channels in backup ---
+            if (optAutoSubscribe) {
+              if (cmp.unsubscribed.length === 0) {
+                autoSubSummary = `\n• YouTube 訂閱同步：備份內所有頻道 (${cmp.subscribed.length} 個) 均已在 YouTube 訂閱中。`;
+              } else {
+                progressModalTitle.textContent = `🔔 正在自動加入 YouTube 訂閱 (${cmp.unsubscribed.length} 個未訂閱頻道)`;
+                progressModalBar.style.width = '0%';
 
-            const batchResult = await YTSubscriptionService.batchSubscribeWithProgress(cmp.unsubscribed, {
-              delayMs: 500,
-              shouldAbort: () => isSubscribeAborted,
-              onProgress: ({ index, total, displayName, status }) => {
-                const pct = Math.round((index / total) * 100);
-                progressModalBar.style.width = `${pct}%`;
-                progressModalCounter.textContent = `${index} / ${total} (${pct}%)`;
-                if (status === 'subscribing') {
-                  progressModalChannelName.textContent = `正在訂閱：${displayName}`;
-                } else if (status === 'success') {
-                  progressModalChannelName.textContent = `✅ 已成功訂閱：${displayName}`;
-                } else {
-                  progressModalChannelName.textContent = `⚠️ 略過/處理中：${displayName}`;
+                const batchResult = await YTSubscriptionService.batchSubscribeWithProgress(cmp.unsubscribed, {
+                  delayMs: 500,
+                  shouldAbort: () => isSubscribeAborted,
+                  onProgress: ({ index, total, displayName, status }) => {
+                    const pct = Math.round((index / total) * 100);
+                    progressModalBar.style.width = `${pct}%`;
+                    progressModalCounter.textContent = `${index} / ${total} (${pct}%)`;
+                    if (status === 'subscribing') {
+                      progressModalChannelName.textContent = `正在訂閱：${displayName}`;
+                    } else if (status === 'success') {
+                      progressModalChannelName.textContent = `✅ 已成功訂閱：${displayName}`;
+                    } else {
+                      progressModalChannelName.textContent = `⚠️ 略過/處理中：${displayName}`;
+                    }
+                  }
+                });
+
+                // Mark newly subscribed channels in local storage
+                for (const r of batchResult.results) {
+                  if (r.result && r.result.success && r.channel?.id) {
+                    await YTFolderStorage.setChannelSubscribed(r.channel.id, true);
+                  }
+                }
+
+                autoSubSummary = `\n• YouTube 訂閱同步：\n  - 原已訂閱：${cmp.subscribed.length} 個\n  - 本次自動新增訂閱：${batchResult.succeeded} 個`;
+                if (batchResult.failed > 0) {
+                  autoSubSummary += `\n  - 略過或未完成：${batchResult.failed} 個`;
+                }
+                if (isSubscribeAborted) {
+                  autoSubSummary += ` (用戶已中斷剩餘訂閱)`;
                 }
               }
-            });
+            }
 
-            // Mark newly subscribed channels in local storage
-            for (const r of batchResult.results) {
-              if (r.result && r.result.success && r.channel?.id) {
-                await YTFolderStorage.setChannelSubscribed(r.channel.id, true);
+            // --- Part B: Check redundant subscriptions (absent from backup, still subscribed on YouTube) ---
+            if (optCheckUnsubscribed && !isSubscribeAborted) {
+              if (cmp.redundantSubscribed.length === 0) {
+                unsubSummary = `\n• YouTube 訂閱清理：已訂閱頻道全部與備份一致，無已刪除之多餘訂閱。`;
+              } else {
+                // Temporarily hide progress modal to let user choose channels to unsubscribe
+                if (subscribeProgressModal) {
+                  subscribeProgressModal.classList.remove('show');
+                }
+
+                // Show confirmation modal and await user decision
+                const channelsToUnsubscribe = await promptUnsubscribeSelection(cmp.redundantSubscribed);
+
+                if (channelsToUnsubscribe && channelsToUnsubscribe.length > 0) {
+                  // User chose to unsubscribe from selected channels
+                  if (subscribeProgressModal) {
+                    isSubscribeAborted = false;
+                    progressModalTitle.textContent = `⚠️ 正在取消 YouTube 訂閱 (${channelsToUnsubscribe.length} 個頻道)`;
+                    progressModalBar.style.width = '0%';
+                    progressModalCounter.textContent = `0 / ${channelsToUnsubscribe.length}`;
+                    progressModalChannelName.textContent = '準備執行取消訂閱...';
+                    subscribeProgressModal.classList.add('show');
+                  }
+
+                  const unsubBatchResult = await YTSubscriptionService.batchUnsubscribeWithProgress(channelsToUnsubscribe, {
+                    delayMs: 500,
+                    shouldAbort: () => isSubscribeAborted,
+                    onProgress: ({ index, total, displayName, status }) => {
+                      const pct = Math.round((index / total) * 100);
+                      progressModalBar.style.width = `${pct}%`;
+                      progressModalCounter.textContent = `${index} / ${total} (${pct}%)`;
+                      if (status === 'unsubscribing') {
+                        progressModalChannelName.textContent = `正在取消訂閱：${displayName}`;
+                      } else if (status === 'success') {
+                        progressModalChannelName.textContent = `✅ 已成功取消訂閱：${displayName}`;
+                      } else {
+                        progressModalChannelName.textContent = `⚠️ 略過/處理中：${displayName}`;
+                      }
+                    }
+                  });
+
+                  for (const r of unsubBatchResult.results) {
+                    if (r.result && r.result.success && r.channel?.id) {
+                      await YTFolderStorage.setChannelSubscribed(r.channel.id, false);
+                    }
+                  }
+
+                  unsubSummary = `\n• YouTube 訂閱清理（取消訂閱）：\n  - 備份已刪除之訂閱頻道：${cmp.redundantSubscribed.length} 個\n  - 本次成功取消訂閱：${unsubBatchResult.succeeded} 個`;
+                  if (unsubBatchResult.failed > 0) {
+                    unsubSummary += `\n  - 略過或未完成：${unsubBatchResult.failed} 個`;
+                  }
+                  if (isSubscribeAborted) {
+                    unsubSummary += ` (用戶已中斷剩餘處理)`;
+                  }
+                } else {
+                  unsubSummary = `\n• YouTube 訂閱清理：已保留現有 ${cmp.redundantSubscribed.length} 個未在備份中的訂閱頻道。`;
+                }
               }
-            }
-
-            autoSubSummary = `\n• YouTube 訂閱同步：\n  - 原已訂閱：${cmp.subscribed.length} 個\n  - 本次自動新增訂閱：${batchResult.succeeded} 個`;
-            if (batchResult.failed > 0) {
-              autoSubSummary += `\n  - 略過或未完成：${batchResult.failed} 個`;
-            }
-            if (isSubscribeAborted) {
-              autoSubSummary += ` (用戶已中斷剩餘訂閱)`;
             }
           }
         } catch (subErr) {
-          console.error('[Options] Auto-subscribe error:', subErr);
+          console.error('[Options] Subscription sync error:', subErr);
           autoSubSummary = `\n• YouTube 訂閱同步：比對時發生問題 (${subErr.message})，頻道已成功匯入分組。`;
         } finally {
           if (subscribeProgressModal) {
@@ -559,6 +749,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       if (autoSubSummary) {
         msg += autoSubSummary + '\n';
+      }
+      if (unsubSummary) {
+        msg += unsubSummary + '\n';
       }
 
       alert(msg);

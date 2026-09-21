@@ -68,5 +68,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'UNSUBSCRIBE_CHANNEL') {
+    (async () => {
+      try {
+        const res = await YTSubscriptionService.unsubscribeChannel(message.channelId);
+        sendResponse(res);
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
+    })();
+    return true;
+  }
+
   return false;
 });

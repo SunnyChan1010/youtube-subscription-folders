@@ -194,40 +194,81 @@ const YTSubscriptionService = (() => {
   }
 
   /**
-   * Recursively extracts channel IDs and handles from YouTube browse API response
+   * Recursively extracts channel IDs, handles, and channel details from YouTube browse API response
    */
-  function extractChannelsFromBrowseData(data, channelSet = new Set(), handleSet = new Set()) {
+  function extractChannelsFromBrowseData(data, channelSet = new Set(), handleSet = new Set(), channelMap = new Map()) {
     if (!data || typeof data !== 'object') return;
 
     if (Array.isArray(data)) {
       for (const item of data) {
-        extractChannelsFromBrowseData(item, channelSet, handleSet);
+        extractChannelsFromBrowseData(item, channelSet, handleSet, channelMap);
       }
       return;
     }
 
+    let foundId = '';
     if (data.channelId && typeof data.channelId === 'string' && data.channelId.startsWith('UC')) {
-      channelSet.add(data.channelId.trim());
-    }
-
-    if (data.navigationEndpoint?.browseEndpoint?.browseId &&
+      foundId = data.channelId.trim();
+    } else if (data.navigationEndpoint?.browseEndpoint?.browseId &&
         typeof data.navigationEndpoint.browseEndpoint.browseId === 'string' &&
         data.navigationEndpoint.browseEndpoint.browseId.startsWith('UC')) {
-      channelSet.add(data.navigationEndpoint.browseEndpoint.browseId.trim());
+      foundId = data.navigationEndpoint.browseEndpoint.browseId.trim();
     }
 
+    let foundHandle = '';
     if (data.navigationEndpoint?.browseEndpoint?.canonicalBaseUrl &&
         typeof data.navigationEndpoint.browseEndpoint.canonicalBaseUrl === 'string') {
       const url = data.navigationEndpoint.browseEndpoint.canonicalBaseUrl;
       const hMatch = url.match(/\/(@[^\/\?]+)/);
       if (hMatch) {
-        handleSet.add(hMatch[1].toLowerCase());
+        foundHandle = hMatch[1].toLowerCase();
+      }
+    }
+
+    if (foundId) channelSet.add(foundId);
+    if (foundHandle) {
+      handleSet.add(foundHandle);
+      handleSet.add(foundHandle.replace(/^@/, ''));
+    }
+
+    // Extract title / name and thumbnail if present
+    let foundName = '';
+    if (data.title) {
+      if (typeof data.title === 'string') {
+        foundName = data.title;
+      } else if (data.title.simpleText) {
+        foundName = data.title.simpleText;
+      } else if (Array.isArray(data.title.runs) && data.title.runs[0]?.text) {
+        foundName = data.title.runs.map(r => r.text).join('');
+      }
+    }
+
+    let foundAvatar = '';
+    if (data.thumbnail?.thumbnails && Array.isArray(data.thumbnail.thumbnails) && data.thumbnail.thumbnails.length > 0) {
+      foundAvatar = data.thumbnail.thumbnails[data.thumbnail.thumbnails.length - 1].url || '';
+    } else if (data.avatar?.thumbnails && Array.isArray(data.avatar.thumbnails) && data.avatar.thumbnails.length > 0) {
+      foundAvatar = data.avatar.thumbnails[data.avatar.thumbnails.length - 1].url || '';
+    }
+
+    if (foundId && channelMap) {
+      const existing = channelMap.get(foundId);
+      if (!existing) {
+        channelMap.set(foundId, {
+          id: foundId,
+          name: foundName || foundHandle || foundId,
+          handle: foundHandle ? (foundHandle.startsWith('@') ? foundHandle : `@${foundHandle}`) : '',
+          avatarUrl: foundAvatar
+        });
+      } else {
+        if (!existing.name && foundName) existing.name = foundName;
+        if (!existing.handle && foundHandle) existing.handle = foundHandle.startsWith('@') ? foundHandle : `@${foundHandle}`;
+        if (!existing.avatarUrl && foundAvatar) existing.avatarUrl = foundAvatar;
       }
     }
 
     for (const key of Object.keys(data)) {
       if (typeof data[key] === 'object' && data[key] !== null) {
-        extractChannelsFromBrowseData(data[key], channelSet, handleSet);
+        extractChannelsFromBrowseData(data[key], channelSet, handleSet, channelMap);
       }
     }
   }
@@ -273,6 +314,7 @@ const YTSubscriptionService = (() => {
     const session = await getAuthSession(forceRefresh);
     const channelIds = new Set();
     const handles = new Set();
+    const channelsMap = new Map();
 
     // If not logged in, return whatever we currently have
     if (!session.sapisid) {
@@ -280,6 +322,7 @@ const YTSubscriptionService = (() => {
       cachedSubscribedChannels = {
         channelIds,
         handles,
+        channelsList: [],
         isLoggedIn: false
       };
       return cachedSubscribedChannels;
@@ -323,7 +366,7 @@ const YTSubscriptionService = (() => {
 
       if (resp.ok) {
         const json = await resp.json();
-        extractChannelsFromBrowseData(json, channelIds, handles);
+        extractChannelsFromBrowseData(json, channelIds, handles, channelsMap);
 
         // Continuation pagination: fetch subsequent pages (up to 10 pages for 1000+ channels)
         let continuationToken = extractContinuationToken(json);
@@ -357,7 +400,7 @@ const YTSubscriptionService = (() => {
             if (!contResp.ok) break;
 
             const contJson = await contResp.json();
-            extractChannelsFromBrowseData(contJson, channelIds, handles);
+            extractChannelsFromBrowseData(contJson, channelIds, handles, channelsMap);
             const nextToken = extractContinuationToken(contJson);
             if (!nextToken || nextToken === continuationToken) break;
             continuationToken = nextToken;
@@ -378,6 +421,7 @@ const YTSubscriptionService = (() => {
     cachedSubscribedChannels = {
       channelIds,
       handles,
+      channelsList: Array.from(channelsMap.values()),
       isLoggedIn: true
     };
     lastSubscribedFetchTime = Date.now();
@@ -439,8 +483,90 @@ const YTSubscriptionService = (() => {
       if (resp.ok) {
         const json = await resp.json().catch(() => ({}));
         // Update cached subscribed set if present
-        if (cachedSubscribedChannels && cachedSubscribedChannels.channelIds) {
-          cachedSubscribedChannels.channelIds.add(canonicalId);
+        if (cachedSubscribedChannels) {
+          if (cachedSubscribedChannels.channelIds) {
+            cachedSubscribedChannels.channelIds.add(canonicalId);
+          }
+          if (cachedSubscribedChannels.channelsList && !cachedSubscribedChannels.channelsList.some(c => c.id === canonicalId)) {
+            cachedSubscribedChannels.channelsList.push({
+              id: canonicalId,
+              name: canonicalId,
+              handle: channelIdOrHandle.startsWith('@') ? channelIdOrHandle : '',
+              avatarUrl: ''
+            });
+          }
+        }
+        return { success: true, channelId: canonicalId, data: json };
+      } else if (resp.status === 401 || resp.status === 403) {
+        return { success: false, error: 'AUTH_FAILED', status: resp.status, channelId: canonicalId };
+      } else {
+        return { success: false, error: `HTTP_${resp.status}`, status: resp.status, channelId: canonicalId };
+      }
+    } catch (err) {
+      return { success: false, error: err.message, channelId: canonicalId };
+    }
+  }
+
+  /**
+   * Unsubscribes from a single channel on YouTube
+   */
+  async function unsubscribeChannel(channelIdOrHandle) {
+    if (!channelIdOrHandle) {
+      return { success: false, error: 'MISSING_CHANNEL_ID' };
+    }
+
+    const canonicalId = await resolveChannelId(channelIdOrHandle);
+    if (!canonicalId || !canonicalId.startsWith('UC')) {
+      return { success: false, error: 'INVALID_CHANNEL_ID', channelId: channelIdOrHandle };
+    }
+
+    const session = await getAuthSession();
+    if (!session.sapisid) {
+      return { success: false, error: 'NOT_LOGGED_IN', channelId: canonicalId };
+    }
+
+    const authHeader = await getSapisidHash(session.sapisid);
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Origin': 'https://www.youtube.com',
+      'X-YouTube-Client-Name': '1',
+      'X-YouTube-Client-Version': session.clientVersion
+    };
+    if (authHeader) {
+      headers['Authorization'] = authHeader;
+    }
+    if (session.visitorData) {
+      headers['X-Goog-Visitor-Id'] = session.visitorData;
+    }
+
+    const payload = {
+      context: {
+        client: {
+          clientName: 'WEB',
+          clientVersion: session.clientVersion
+        }
+      },
+      channelIds: [canonicalId],
+      params: 'CgIIBBgA'
+    };
+
+    try {
+      const resp = await fetch(`https://www.youtube.com/youtubei/v1/subscription/unsubscribe?key=${session.apiKey}`, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+
+      if (resp.ok) {
+        const json = await resp.json().catch(() => ({}));
+        if (cachedSubscribedChannels) {
+          if (cachedSubscribedChannels.channelIds) {
+            cachedSubscribedChannels.channelIds.delete(canonicalId);
+          }
+          if (cachedSubscribedChannels.channelsList) {
+            cachedSubscribedChannels.channelsList = cachedSubscribedChannels.channelsList.filter(c => c.id !== canonicalId);
+          }
         }
         return { success: true, channelId: canonicalId, data: json };
       } else if (resp.status === 401 || resp.status === 403) {
@@ -455,28 +581,42 @@ const YTSubscriptionService = (() => {
 
   /**
    * Compares a list of channels against YouTube subscription status
-   * Returns: { subscribed: [...], unsubscribed: [...], isLoggedIn: boolean }
+   * Returns: {
+   *   subscribed: [...],            // in backup & currently subscribed on YouTube
+   *   unsubscribed: [...],          // in backup & NOT yet subscribed on YouTube
+   *   redundantSubscribed: [...],   // currently subscribed on YouTube & NOT in backup
+   *   isLoggedIn: boolean
+   * }
    */
   async function compareSubscriptions(channelsList) {
     const subsData = await fetchSubscribedChannels();
-    const { channelIds, handles, isLoggedIn } = subsData;
+    const { channelIds, handles, channelsList: liveChannelsList, isLoggedIn } = subsData;
 
     const subscribed = [];
     const unsubscribed = [];
+
+    const backupIds = new Set();
+    const backupHandles = new Set();
 
     for (const ch of channelsList) {
       const id = ch.id ? String(ch.id).trim() : '';
       const handle = ch.handle ? String(ch.handle).trim().toLowerCase() : '';
       const normHandle = handle.replace(/^@/, '');
 
-      let isSub = false;
+      if (id) {
+        backupIds.add(id.toLowerCase());
+      }
+      if (normHandle) {
+        backupHandles.add(normHandle);
+        backupHandles.add('@' + normHandle);
+      }
 
+      let isSub = false;
       if (id && channelIds.has(id)) {
         isSub = true;
       } else if (handle && (handles.has(handle) || handles.has(`@${normHandle}`))) {
         isSub = true;
       } else if (ch.isSubscribed === true) {
-        // Fallback to local storage flag if available
         isSub = true;
       }
 
@@ -487,9 +627,28 @@ const YTSubscriptionService = (() => {
       }
     }
 
+    // Identify channels currently subscribed on YouTube that are NOT in backup
+    const redundantSubscribed = [];
+    const candidateList = (liveChannelsList && liveChannelsList.length > 0)
+      ? liveChannelsList
+      : Array.from(channelIds).map(cid => ({ id: cid, name: cid, handle: '', avatarUrl: '' }));
+
+    for (const liveCh of candidateList) {
+      const lId = liveCh.id ? String(liveCh.id).trim().toLowerCase() : '';
+      const lHandle = liveCh.handle ? String(liveCh.handle).trim().toLowerCase().replace(/^@/, '') : '';
+
+      const matchedInBackup = (lId && backupIds.has(lId)) ||
+                             (lHandle && (backupHandles.has(lHandle) || backupHandles.has('@' + lHandle)));
+
+      if (!matchedInBackup) {
+        redundantSubscribed.push(liveCh);
+      }
+    }
+
     return {
       subscribed,
       unsubscribed,
+      redundantSubscribed,
       isLoggedIn
     };
   }
@@ -563,6 +722,74 @@ const YTSubscriptionService = (() => {
     };
   }
 
+  /**
+   * Batch unsubscribes from multiple channels with safety delay and progress callbacks
+   */
+  async function batchUnsubscribeWithProgress(channels, {
+    delayMs = 500,
+    onProgress = null,
+    shouldAbort = null
+  } = {}) {
+    const results = [];
+    let succeeded = 0;
+    let failed = 0;
+
+    for (let i = 0; i < channels.length; i++) {
+      if (shouldAbort && shouldAbort()) {
+        break;
+      }
+
+      const ch = channels[i];
+      const target = ch.id || ch.handle;
+      const displayName = ch.name || ch.handle || ch.id || `頻道 #${i + 1}`;
+
+      if (onProgress) {
+        onProgress({
+          index: i + 1,
+          total: channels.length,
+          channel: ch,
+          displayName,
+          status: 'unsubscribing'
+        });
+      }
+
+      const res = await unsubscribeChannel(target);
+
+      if (res.success) {
+        succeeded++;
+      } else {
+        failed++;
+      }
+
+      results.push({
+        channel: ch,
+        result: res
+      });
+
+      if (onProgress) {
+        onProgress({
+          index: i + 1,
+          total: channels.length,
+          channel: ch,
+          displayName,
+          status: res.success ? 'success' : 'error',
+          error: res.error
+        });
+      }
+
+      if (i < channels.length - 1) {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+
+    return {
+      total: channels.length,
+      succeeded,
+      failed,
+      results
+    };
+  }
+
   return {
     getSapisidHash,
     getAuthSession,
@@ -570,7 +797,9 @@ const YTSubscriptionService = (() => {
     fetchSubscribedChannels,
     compareSubscriptions,
     subscribeChannel,
+    unsubscribeChannel,
     batchSubscribeWithProgress,
+    batchUnsubscribeWithProgress,
     extractContinuationToken
   };
 })();
