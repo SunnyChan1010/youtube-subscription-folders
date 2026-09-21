@@ -138,6 +138,13 @@
           <span>嚴格單一分組模式（若頻道出現在多個分組，僅保留於首個分組）</span>
         </label>
       </div>
+      <div class="form-group" style="gap: 8px; margin-top: 4px; padding: 10px 12px; background: rgba(33, 150, 243, 0.08); border-radius: 8px; border: 1px solid rgba(33, 150, 243, 0.25);">
+        <label class="form-label" style="color: #2196f3; font-weight: 600;">🔔 訂閱狀態比對與自動訂閱</label>
+        <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+          <input type="checkbox" id="import-opt-auto-subscribe" checked />
+          <span>比對現有訂閱：若備份內包含未訂閱的頻道，自動加入分組並同步加入 YouTube 訂閱</span>
+        </label>
+      </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="import-btn-cancel">取消</button>
         <button class="btn btn-primary" id="import-btn-confirm">確認匯入</button>
@@ -145,8 +152,27 @@
     </div>
   </div>
 
+  <!-- Auto-Subscribe Progress Modal -->
+  <div class="modal-overlay" id="subscribe-progress-modal">
+    <div class="modal-content" style="width: 480px; text-align: center;">
+      <div class="modal-title" id="progress-modal-title">🔔 正在同步 YouTube 訂閱</div>
+      <div style="font-size: 14px; margin: 12px 0 6px; color: var(--text-primary); font-weight: 500;" id="progress-modal-channel-name">正在比對訂閱狀態...</div>
+      <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 16px;" id="progress-modal-counter">準備中...</div>
+      
+      <!-- Progress Bar Track -->
+      <div style="width: 100%; height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden; margin-bottom: 20px;">
+        <div id="progress-modal-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #2196f3, #4caf50); border-radius: 5px; transition: width 0.3s ease;"></div>
+      </div>
+
+      <div style="display: flex; justify-content: center; gap: 12px;">
+        <button class="btn btn-secondary" id="progress-modal-btn-cancel">中斷訂閱</button>
+      </div>
+    </div>
+  </div>
+
   <script src="../scripts/initial_data.js"></script>
   <script src="../scripts/storage.js"></script>
+  <script src="../scripts/youtube_api.js"></script>
   <script src="options.js"></script>
 </body>
 </html>
