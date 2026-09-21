@@ -5,6 +5,7 @@
   "description": "為 YouTube 訂閱頻道建立自訂分組、側邊欄導覽整合與動態牆即時過濾（無廣告、純本地隱私保護）。",
   "icons": {
     "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
@@ -24,6 +25,7 @@
     "default_title": "YouTube 訂閱分組",
     "default_icon": {
       "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
       "48": "icons/icon-48.png",
       "128": "icons/icon-128.png"
     }

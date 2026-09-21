@@ -1,7 +1,24 @@
 # YouTube 訂閱分組管理 (YouTube Subscription Folders)
 
-一款輕量、高效、注重隱私的 YouTube 訂閱頻道分組與管理 Chrome 擴充套件（Manifest V3）。
-融合 **QuickTube** 的極簡側邊欄整合、**FolderTube** 的流暢現代體驗與 **PocketTube** 的強大動態牆過濾功能。
+<p align="center">
+  <img src="assets/cover.png" alt="YouTube Subscription Folders Banner" width="100%" style="border-radius: 12px; margin-bottom: 16px;" />
+</p>
+
+<p align="center">
+  <img src="icons/icon-128.png" alt="Logo" width="96" height="96" style="border-radius: 20px;" />
+</p>
+
+<p align="center">
+  <strong>一款輕量、高效、注重隱私的 YouTube 訂閱頻道分組與管理 Chrome 擴充套件（Manifest V3）。</strong><br />
+  融合 <strong>QuickTube</strong> 的極簡側邊欄整合、<strong>FolderTube</strong> 的流暢現代體驗與 <strong>PocketTube</strong> 的強大動態牆過濾功能。
+</p>
+
+<p align="center">
+  <a href="https://github.com/SunnyChan1010/youtube-subscription-folders/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License" /></a>
+  <img src="https://img.shields.io/badge/Chrome_Extension-Manifest_V3-brightgreen.svg" alt="Manifest V3" />
+  <img src="https://img.shields.io/badge/YouTube-Compatible-red.svg" alt="YouTube" />
+  <img src="https://img.shields.io/badge/Privacy-100%25_Local-blueviolet.svg" alt="Privacy First" />
+</p>
 
 ---
 
