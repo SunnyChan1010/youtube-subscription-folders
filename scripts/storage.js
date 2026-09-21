@@ -517,7 +517,7 @@ const YTFolderStorage = (() => {
       const ch = channels[id];
       if (ch) {
         if (chLower && ch.id && ch.id.toLowerCase() === chLower) return true;
-        if (chNorm && ch.handle && normalizeHandle(ch.handle) === normTarget) return true;
+        if (chNorm && ch.handle && normalizeHandle(ch.handle) === chNorm) return true;
       }
       return false;
     });
