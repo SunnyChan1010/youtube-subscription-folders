@@ -43,6 +43,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const importBtnCancel = document.getElementById('import-btn-cancel');
   const importBtnConfirm = document.getElementById('import-btn-confirm');
 
+  // Subscribe Progress Modal
+  const subscribeProgressModal = document.getElementById('subscribe-progress-modal');
+  const progressModalTitle = document.getElementById('progress-modal-title');
+  const progressModalChannelName = document.getElementById('progress-modal-channel-name');
+  const progressModalCounter = document.getElementById('progress-modal-counter');
+  const progressModalBar = document.getElementById('progress-modal-bar');
+  const progressModalBtnCancel = document.getElementById('progress-modal-btn-cancel');
+  let isSubscribeAborted = false;
+
   async function loadData() {
     allFolders = await YTFolderStorage.getFolders();
     allChannels = await YTFolderStorage.getChannels();
@@ -441,13 +450,90 @@ document.addEventListener('DOMContentLoaded', async () => {
     const importMode = modeEl ? modeEl.value : 'overwrite';
     const optDedupCategorized = document.getElementById('import-opt-dedup-categorized')?.checked !== false;
     const optSingleFolder = document.getElementById('import-opt-single-folder')?.checked !== false;
+    const optAutoSubscribe = document.getElementById('import-opt-auto-subscribe')?.checked !== false;
 
     try {
+      // 1. First import and deduplicate data into storage (automatically adding them to folders)
       const res = await YTFolderStorage.importData(content, {
         mergeWithExisting: importMode === 'merge',
         prioritizeCategorized: optDedupCategorized,
         singleFolderMode: optSingleFolder
       });
+
+      importModal.classList.remove('show');
+
+      let autoSubSummary = '';
+
+      // 2. If Auto-Subscribe is enabled, compare with YouTube subscriptions and subscribe missing channels
+      if (optAutoSubscribe && res.channelsList && res.channelsList.length > 0) {
+        if (subscribeProgressModal) {
+          isSubscribeAborted = false;
+          progressModalTitle.textContent = '🔔 正在比對 YouTube 訂閱狀態';
+          progressModalChannelName.textContent = '連線 YouTube 查詢現有訂閱清單...';
+          progressModalCounter.textContent = '分析中，請稍候...';
+          progressModalBar.style.width = '15%';
+          subscribeProgressModal.classList.add('show');
+
+          progressModalBtnCancel.onclick = () => {
+            isSubscribeAborted = true;
+            progressModalChannelName.textContent = '正在取消/中斷訂閱...';
+          };
+        }
+
+        try {
+          // Compare against live YouTube subscriptions
+          const cmp = await YTSubscriptionService.compareSubscriptions(res.channelsList);
+
+          if (!cmp.isLoggedIn) {
+            autoSubSummary = `\n• YouTube 訂閱同步：未檢測到登入狀態，頻道已全部成功加入分組，但未能自動於 YouTube 訂閱（登入後可使用「一鍵同步」）。`;
+          } else if (cmp.unsubscribed.length === 0) {
+            autoSubSummary = `\n• YouTube 訂閱同步：備份內所有頻道 (${cmp.subscribed.length} 個) 均已在 YouTube 訂閱中。`;
+          } else {
+            // Unsubscribed channels exist -> trigger auto-subscribe!
+            progressModalTitle.textContent = `🔔 正在自動加入 YouTube 訂閱 (${cmp.unsubscribed.length} 個未訂閱頻道)`;
+            progressModalBar.style.width = '0%';
+
+            const batchResult = await YTSubscriptionService.batchSubscribeWithProgress(cmp.unsubscribed, {
+              delayMs: 500,
+              shouldAbort: () => isSubscribeAborted,
+              onProgress: ({ index, total, displayName, status }) => {
+                const pct = Math.round((index / total) * 100);
+                progressModalBar.style.width = `${pct}%`;
+                progressModalCounter.textContent = `${index} / ${total} (${pct}%)`;
+                if (status === 'subscribing') {
+                  progressModalChannelName.textContent = `正在訂閱：${displayName}`;
+                } else if (status === 'success') {
+                  progressModalChannelName.textContent = `✅ 已成功訂閱：${displayName}`;
+                } else {
+                  progressModalChannelName.textContent = `⚠️ 略過/處理中：${displayName}`;
+                }
+              }
+            });
+
+            // Mark newly subscribed channels in local storage
+            for (const r of batchResult.results) {
+              if (r.result && r.result.success && r.channel?.id) {
+                await YTFolderStorage.setChannelSubscribed(r.channel.id, true);
+              }
+            }
+
+            autoSubSummary = `\n• YouTube 訂閱同步：\n  - 原已訂閱：${cmp.subscribed.length} 個\n  - 本次自動新增訂閱：${batchResult.succeeded} 個`;
+            if (batchResult.failed > 0) {
+              autoSubSummary += `\n  - 略過或未完成：${batchResult.failed} 個`;
+            }
+            if (isSubscribeAborted) {
+              autoSubSummary += ` (用戶已中斷剩餘訂閱)`;
+            }
+          }
+        } catch (subErr) {
+          console.error('[Options] Auto-subscribe error:', subErr);
+          autoSubSummary = `\n• YouTube 訂閱同步：比對時發生問題 (${subErr.message})，頻道已成功匯入分組。`;
+        } finally {
+          if (subscribeProgressModal) {
+            subscribeProgressModal.classList.remove('show');
+          }
+        }
+      }
 
       let msg = `🎉 備份匯入成功！\n`;
       msg += `• 模式：${importMode === 'merge' ? '與現有分組合併' : '覆蓋現有分組'}\n`;
@@ -471,8 +557,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         msg += `• 重複檢查：無多餘重複頻道。\n`;
       }
 
+      if (autoSubSummary) {
+        msg += autoSubSummary + '\n';
+      }
+
       alert(msg);
-      importModal.classList.remove('show');
       await loadData();
     } catch (err) {
       alert('匯入失敗，請確認 JSON 格式是否正確: ' + err.message);
