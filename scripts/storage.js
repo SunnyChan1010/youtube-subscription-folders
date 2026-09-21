@@ -47,10 +47,9 @@ const YTFolderStorage = (() => {
   // Initialize data from bundled YT_INITIAL_DATA
   async function init(force = false) {
     const raw = await getRaw([STORAGE_KEYS.INITIALIZED, STORAGE_KEYS.FOLDERS, STORAGE_KEYS.CHANNELS]);
-    const hasFolders = Array.isArray(raw[STORAGE_KEYS.FOLDERS]) && raw[STORAGE_KEYS.FOLDERS].length > 0;
-    const hasChannels = raw[STORAGE_KEYS.CHANNELS] && Object.keys(raw[STORAGE_KEYS.CHANNELS]).length > 0;
 
-    if (!force && raw[STORAGE_KEYS.INITIALIZED] && hasFolders && hasChannels) {
+    // If already initialized once and not force-resetting, respect existing user data (even if empty)
+    if (!force && raw[STORAGE_KEYS.INITIALIZED]) {
       return;
     }
 
@@ -106,14 +105,14 @@ const YTFolderStorage = (() => {
   }
 
   async function getFolders() {
-    let raw = await getRaw([STORAGE_KEYS.FOLDERS]);
+    let raw = await getRaw([STORAGE_KEYS.FOLDERS, STORAGE_KEYS.INITIALIZED]);
     let folders = raw[STORAGE_KEYS.FOLDERS];
-    if (!folders || !Array.isArray(folders) || folders.length === 0) {
-      await init(true);
+    if (!raw[STORAGE_KEYS.INITIALIZED] && (!folders || !Array.isArray(folders))) {
+      await init(false);
       raw = await getRaw([STORAGE_KEYS.FOLDERS]);
       folders = raw[STORAGE_KEYS.FOLDERS] || [];
     }
-    return folders;
+    return Array.isArray(folders) ? folders : [];
   }
 
   async function setFolders(folders) {
@@ -122,7 +121,7 @@ const YTFolderStorage = (() => {
   }
 
   async function getChannels() {
-    let raw = await getRaw([STORAGE_KEYS.CHANNELS]);
+    let raw = await getRaw([STORAGE_KEYS.CHANNELS, STORAGE_KEYS.INITIALIZED]);
     let channels = raw[STORAGE_KEYS.CHANNELS];
 
     // Auto-migrate array storage into dictionary format if needed
@@ -143,12 +142,12 @@ const YTFolderStorage = (() => {
       await setRaw({ [STORAGE_KEYS.CHANNELS]: channels });
     }
 
-    if (!channels || Object.keys(channels).length === 0) {
-      await init(true);
+    if (!raw[STORAGE_KEYS.INITIALIZED] && (!channels || typeof channels !== 'object')) {
+      await init(false);
       raw = await getRaw([STORAGE_KEYS.CHANNELS]);
       channels = raw[STORAGE_KEYS.CHANNELS] || {};
     }
-    return channels;
+    return (channels && typeof channels === 'object') ? channels : {};
   }
 
   async function setChannels(channels) {
@@ -473,14 +472,25 @@ const YTFolderStorage = (() => {
 
   async function removeChannelFromFolder(folderId, channelId) {
     const folders = await getFolders();
+    const channels = await getChannels();
     const folder = folders.find(f => f.id === folderId);
-    if (!folder) return false;
+    if (!folder || !Array.isArray(folder.channels)) return false;
 
     const normTarget = normalizeHandle(channelId);
+    const targetLower = (channelId || '').toLowerCase();
+
     folder.channels = folder.channels.filter(id => {
+      if (!id) return false;
       if (id === channelId) return false;
-      if (id.toLowerCase() === channelId.toLowerCase()) return false;
+      if (id.toLowerCase() === targetLower) return false;
       if (normTarget && normalizeHandle(id) === normTarget) return false;
+
+      // Cross-reference via channels dictionary
+      const ch = channels[id];
+      if (ch) {
+        if (targetLower && ch.id && ch.id.toLowerCase() === targetLower) return false;
+        if (normTarget && ch.handle && normalizeHandle(ch.handle) === normTarget) return false;
+      }
       return true;
     });
 
@@ -490,16 +500,27 @@ const YTFolderStorage = (() => {
 
   async function toggleChannelInFolder(folderId, channelInfo) {
     const folders = await getFolders();
+    const channels = await getChannels();
     const folder = folders.find(f => f.id === folderId);
     if (!folder) return false;
 
-    const chId = channelInfo.id || channelInfo.handle;
+    const chId = channelInfo.id || channelInfo.handle || '';
     const chNorm = normalizeHandle(channelInfo.handle || chId);
+    const chLower = chId.toLowerCase();
 
-    const exists = folder.channels.some(id =>
-      id.toLowerCase() === chId.toLowerCase() ||
-      (chNorm && normalizeHandle(id) === chNorm)
-    );
+    const exists = Array.isArray(folder.channels) && folder.channels.some(id => {
+      if (!id) return false;
+      if (id.toLowerCase() === chLower) return true;
+      if (chNorm && normalizeHandle(id) === chNorm) return true;
+
+      // Cross-reference via channels dictionary
+      const ch = channels[id];
+      if (ch) {
+        if (chLower && ch.id && ch.id.toLowerCase() === chLower) return true;
+        if (chNorm && ch.handle && normalizeHandle(ch.handle) === normTarget) return true;
+      }
+      return false;
+    });
 
     if (exists) {
       await removeChannelFromFolder(folderId, chId);
@@ -796,7 +817,12 @@ const YTFolderStorage = (() => {
       window.dispatchEvent(new CustomEvent('yt-folders-storage-updated'));
     }
     if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      chrome.runtime.sendMessage({ action: 'STORAGE_UPDATED' }).catch(() => {});
+      try {
+        const p = chrome.runtime.sendMessage({ action: 'STORAGE_UPDATED' });
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => {});
+        }
+      } catch (e) {}
     }
   }
 

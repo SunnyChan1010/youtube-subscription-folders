@@ -550,10 +550,6 @@
       return;
     }
 
-    if (document.getElementById('yt-org-channel-tagger-wrapper')) {
-      return;
-    }
-
     let actionContainer = null;
     let channelInfo = null;
 
@@ -589,9 +585,26 @@
 
     if (!channelInfo || (!channelInfo.id && !channelInfo.handle)) return;
 
+    const channelKey = channelInfo.id || channelInfo.handle;
+    const existing = document.getElementById('yt-org-channel-tagger-wrapper');
+
+    if (existing) {
+      // If wrapper already exists for the exact current channel, refresh appearance & return
+      if (existing.dataset.channelKey === channelKey) {
+        const btn = existing.querySelector('#yt-org-tagger-toggle-btn');
+        if (btn) {
+          updateTaggerButtonAppearance(btn, channelInfo);
+        }
+        return;
+      }
+      // Stale wrapper from previous video/channel (SPA navigation) -> remove and recreate cleanly
+      existing.remove();
+    }
+
     const wrapper = document.createElement('div');
     wrapper.id = 'yt-org-channel-tagger-wrapper';
     wrapper.className = 'yt-org-channel-tagger-container';
+    wrapper.dataset.channelKey = channelKey;
 
     const btn = document.createElement('button');
     btn.id = 'yt-org-tagger-toggle-btn';
@@ -818,7 +831,7 @@
     }
     const pathname = window.location.pathname;
     const isChannelOrWatch = pathname.startsWith('/@') || pathname.startsWith('/channel/') || pathname.startsWith('/watch');
-    if (isChannelOrWatch && !document.getElementById('yt-org-channel-tagger-wrapper')) {
+    if (isChannelOrWatch) {
       checkAndInjectChannelTagger();
     }
     if (pathname.startsWith('/feed/channels') && !document.getElementById('yt-org-sync-banner')) {

@@ -233,6 +233,36 @@ const YTSubscriptionService = (() => {
   }
 
   /**
+   * Recursively finds a continuation token in InnerTube response data
+   */
+  function extractContinuationToken(data) {
+    if (!data || typeof data !== 'object') return null;
+
+    if (data.continuationCommand && typeof data.continuationCommand.token === 'string') {
+      return data.continuationCommand.token;
+    }
+    if (data.nextContinuationData && typeof data.nextContinuationData.continuation === 'string') {
+      return data.nextContinuationData.continuation;
+    }
+
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        const token = extractContinuationToken(item);
+        if (token) return token;
+      }
+      return null;
+    }
+
+    for (const key of Object.keys(data)) {
+      if (typeof data[key] === 'object' && data[key] !== null) {
+        const token = extractContinuationToken(data[key]);
+        if (token) return token;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Fetches user's currently subscribed channels directly from YouTube InnerTube browse API
    */
   async function fetchSubscribedChannels(forceRefresh = false) {
@@ -294,7 +324,50 @@ const YTSubscriptionService = (() => {
       if (resp.ok) {
         const json = await resp.json();
         extractChannelsFromBrowseData(json, channelIds, handles);
-        console.log(`[YTSubscriptionService] Fetched ${channelIds.size} subscribed channels from YouTube InnerTube.`);
+
+        // Continuation pagination: fetch subsequent pages (up to 10 pages for 1000+ channels)
+        let continuationToken = extractContinuationToken(json);
+        let pageCount = 0;
+        const maxPages = 10;
+
+        while (continuationToken && pageCount < maxPages) {
+          pageCount++;
+          const contPayload = {
+            context: {
+              client: {
+                clientName: 'WEB',
+                clientVersion: session.clientVersion,
+                originalUrl: 'https://www.youtube.com/feed/channels',
+                mainAppWebInfo: {
+                  graftUrl: '/feed/channels'
+                }
+              }
+            },
+            continuation: continuationToken
+          };
+
+          try {
+            const contResp = await fetch(`https://www.youtube.com/youtubei/v1/browse?key=${session.apiKey}`, {
+              method: 'POST',
+              headers,
+              credentials: 'include',
+              body: JSON.stringify(contPayload)
+            });
+
+            if (!contResp.ok) break;
+
+            const contJson = await contResp.json();
+            extractChannelsFromBrowseData(contJson, channelIds, handles);
+            const nextToken = extractContinuationToken(contJson);
+            if (!nextToken || nextToken === continuationToken) break;
+            continuationToken = nextToken;
+          } catch (pErr) {
+            console.warn('[YTSubscriptionService] Error fetching continuation page:', pErr);
+            break;
+          }
+        }
+
+        console.log(`[YTSubscriptionService] Fetched ${channelIds.size} subscribed channels from YouTube InnerTube (${pageCount + 1} pages).`);
       } else {
         console.warn(`[YTSubscriptionService] InnerTube browse returned status ${resp.status}`);
       }
@@ -497,7 +570,8 @@ const YTSubscriptionService = (() => {
     fetchSubscribedChannels,
     compareSubscriptions,
     subscribeChannel,
-    batchSubscribeWithProgress
+    batchSubscribeWithProgress,
+    extractContinuationToken
   };
 })();
 

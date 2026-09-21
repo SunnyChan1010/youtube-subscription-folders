@@ -131,8 +131,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       folderListEl.appendChild(secTitle);
 
       matchedChannels.slice(0, 25).forEach(ch => {
+        const normHandle = (ch.handle || '').replace(/^@/, '').toLowerCase();
+        const chLower = (ch.id || '').toLowerCase();
         const inFolders = allFolders.filter(f =>
-          f.channels && (f.channels.includes(ch.id) || (ch.handle && f.channels.includes(ch.handle)))
+          f.channels && f.channels.some(cid => {
+            if (!cid) return false;
+            const cidLower = cid.toLowerCase();
+            if (chLower && cidLower === chLower) return true;
+            if (normHandle && cidLower.replace(/^@/, '') === normHandle) return true;
+            return false;
+          })
         );
 
         const item = document.createElement('div');
