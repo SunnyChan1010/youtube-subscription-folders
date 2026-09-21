@@ -779,6 +779,26 @@
       sendResponse({ success: true });
       return false;
     }
+    if (msg.action === 'GET_YT_CONFIG') {
+      let apiKey = '';
+      let clientVersion = '';
+      let visitorData = '';
+      const scripts = document.querySelectorAll('script');
+      for (const s of scripts) {
+        const txt = s.textContent || '';
+        if (txt.includes('INNERTUBE_API_KEY')) {
+          const kMatch = txt.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
+          if (kMatch) apiKey = kMatch[1];
+          const vMatch = txt.match(/"INNERTUBE_CLIENT_VERSION":"([^"]+)"/) || txt.match(/"clientVersion":"([^"]+)"/);
+          if (vMatch) clientVersion = vMatch[1];
+          const visMatch = txt.match(/"VISITOR_DATA":"([^"]+)"/);
+          if (visMatch) visitorData = visMatch[1];
+          break;
+        }
+      }
+      sendResponse({ apiKey, clientVersion, visitorData });
+      return false;
+    }
     return false;
   });
 
