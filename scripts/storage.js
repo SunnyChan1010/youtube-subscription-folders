@@ -1,6 +1,7 @@
 /**
  * YouTube Subscription Folders - Storage Helper
  * Provides unified access to chrome.storage.local with pre-bundled fallback data.
+ * Enhanced with intelligent channel deduplication (prioritizing categorized channels).
  */
 
 const YTFolderStorage = (() => {
@@ -18,6 +19,11 @@ const YTFolderStorage = (() => {
     activeFeedFolderId: 'all',
     expandedFolders: {}
   };
+
+  function normalizeHandle(h) {
+    if (!h) return '';
+    return String(h).trim().toLowerCase().replace(/^@/, '');
+  }
 
   async function getRaw(keys) {
     return new Promise((resolve) => {
@@ -118,6 +124,25 @@ const YTFolderStorage = (() => {
   async function getChannels() {
     let raw = await getRaw([STORAGE_KEYS.CHANNELS]);
     let channels = raw[STORAGE_KEYS.CHANNELS];
+
+    // Auto-migrate array storage into dictionary format if needed
+    if (Array.isArray(channels)) {
+      const map = {};
+      channels.forEach(ch => {
+        if (ch && (ch.id || ch.handle)) {
+          const cid = ch.id || ch.handle;
+          map[cid] = {
+            id: cid,
+            name: ch.name || ch.handle || cid,
+            handle: ch.handle || '',
+            avatarUrl: ch.avatarUrl || ''
+          };
+        }
+      });
+      channels = map;
+      await setRaw({ [STORAGE_KEYS.CHANNELS]: channels });
+    }
+
     if (!channels || Object.keys(channels).length === 0) {
       await init(true);
       raw = await getRaw([STORAGE_KEYS.CHANNELS]);
@@ -174,6 +199,224 @@ const YTFolderStorage = (() => {
     await setFolders(filtered);
   }
 
+  // ---------------------------------------------------------------------------
+  // Core Deduplication Engine
+  // ---------------------------------------------------------------------------
+  function deduplicateData({
+    folders = [],
+    channels = [],
+    uncategorizedChannels = [],
+    options = {}
+  }) {
+    const singleFolderMode = options.singleFolderMode !== false; // default true
+    const prioritizeCategorized = options.prioritizeCategorized !== false; // default true
+
+    // 1. Gather all raw channel objects
+    const rawChannelsList = [];
+    function addRaw(item) {
+      if (!item) return;
+      if (Array.isArray(item)) {
+        item.forEach(addRaw);
+      } else if (typeof item === 'object') {
+        if (item.id || item.handle || item.name) {
+          rawChannelsList.push(item);
+        } else {
+          Object.values(item).forEach(addRaw);
+        }
+      }
+    }
+
+    addRaw(channels);
+    addRaw(uncategorizedChannels);
+
+    folders.forEach(f => {
+      if (Array.isArray(f.channels)) {
+        f.channels.forEach(chItem => {
+          if (typeof chItem === 'object' && chItem !== null) {
+            addRaw(chItem);
+          }
+        });
+      }
+    });
+
+    // 2. Build Canonical Channel Registry (merging duplicates)
+    const canonicalList = [];
+    const aliasToCanonicalId = {};
+
+    function findCanonical(item) {
+      if (!item) return null;
+      const idStr = item.id ? String(item.id).trim() : '';
+      const hStr = normalizeHandle(item.handle);
+
+      for (const c of canonicalList) {
+        const cId = String(c.id).trim();
+        const cH = normalizeHandle(c.handle);
+
+        if (idStr && cId && idStr.toLowerCase() === cId.toLowerCase()) return c;
+        if (hStr && cH && hStr === cH) return c;
+        if (idStr && cH && normalizeHandle(idStr) === cH) return c;
+        if (hStr && cId && hStr === normalizeHandle(cId)) return c;
+      }
+      return null;
+    }
+
+    for (const raw of rawChannelsList) {
+      const rawId = raw.id ? String(raw.id).trim() : '';
+      const rawHandle = raw.handle ? String(raw.handle).trim() : '';
+      const rawName = raw.name ? String(raw.name).trim() : '';
+      const rawAvatar = raw.avatarUrl || '';
+
+      let canon = findCanonical(raw);
+      if (!canon) {
+        canon = {
+          id: rawId || (rawHandle.startsWith('@') ? rawHandle : '@' + rawHandle),
+          handle: rawHandle ? (rawHandle.startsWith('@') ? rawHandle : '@' + rawHandle) : '',
+          name: rawName || rawHandle || rawId,
+          avatarUrl: rawAvatar
+        };
+        canonicalList.push(canon);
+      } else {
+        // Merge attributes: prioritize real UC channel ID
+        if (rawId && rawId.startsWith('UC')) {
+          canon.id = rawId;
+        }
+        if (!canon.handle && rawHandle) {
+          canon.handle = rawHandle.startsWith('@') ? rawHandle : '@' + rawHandle;
+        }
+        if (!canon.avatarUrl && rawAvatar) {
+          canon.avatarUrl = rawAvatar;
+        }
+        if (rawName && (!canon.name || canon.name.startsWith('@') || canon.name.startsWith('UC'))) {
+          canon.name = rawName;
+        }
+      }
+
+      if (rawId) {
+        aliasToCanonicalId[rawId.toLowerCase()] = canon.id;
+      }
+      if (rawHandle) {
+        const nh = normalizeHandle(rawHandle);
+        aliasToCanonicalId[nh] = canon.id;
+        aliasToCanonicalId['@' + nh] = canon.id;
+      }
+    }
+
+    function resolveToCanonicalId(ref) {
+      if (!ref) return null;
+      if (typeof ref === 'object') {
+        const direct = findCanonical(ref);
+        return direct ? direct.id : (ref.id || ref.handle);
+      }
+      const str = String(ref).trim();
+      const lower = str.toLowerCase();
+      if (aliasToCanonicalId[lower]) return aliasToCanonicalId[lower];
+      const nh = normalizeHandle(str);
+      if (aliasToCanonicalId[nh]) return aliasToCanonicalId[nh];
+      if (aliasToCanonicalId['@' + nh]) return aliasToCanonicalId['@' + nh];
+
+      const direct = findCanonical({ id: str, handle: str });
+      return direct ? direct.id : str;
+    }
+
+    // 3. Process Folders & Deduplicate Channel References
+    let dupInSameFolder = 0;
+    let dupAcrossFolders = 0;
+    const seenInAnyFolder = new Set();
+    const cleanFolders = [];
+
+    for (const f of folders) {
+      const fChannels = [];
+      const seenInThisFolder = new Set();
+      const rawRefs = Array.isArray(f.channels) ? f.channels : [];
+
+      for (const rawRef of rawRefs) {
+        const canonId = resolveToCanonicalId(rawRef);
+        if (!canonId) continue;
+
+        const canonKey = canonId.toLowerCase();
+
+        // Check duplicate within the same folder
+        if (seenInThisFolder.has(canonKey)) {
+          dupInSameFolder++;
+          continue;
+        }
+
+        // Check duplicate across folders (if singleFolderMode is enabled)
+        if (singleFolderMode && seenInAnyFolder.has(canonKey)) {
+          dupAcrossFolders++;
+          continue; // Prioritize keeping in the first folder, delete redundant subsequent assignment
+        }
+
+        seenInThisFolder.add(canonKey);
+        seenInAnyFolder.add(canonKey);
+        fChannels.push(canonId);
+
+        // Ensure canonicalList has this channel
+        if (!canonicalList.find(c => c.id.toLowerCase() === canonKey)) {
+          canonicalList.push({
+            id: canonId,
+            handle: canonId.startsWith('@') ? canonId : '',
+            name: canonId,
+            avatarUrl: ''
+          });
+        }
+      }
+
+      cleanFolders.push({
+        id: f.id || `folder_${Date.now()}_${cleanFolders.length}`,
+        name: f.name || `Folder ${cleanFolders.length + 1}`,
+        icon: f.icon || '📁',
+        color: f.color || '#2196f3',
+        description: f.description || '',
+        channels: fChannels
+      });
+    }
+
+    // 4. Build Clean Channels Dictionary (keyed by canonical ID)
+    const cleanChannelsMap = {};
+    for (const c of canonicalList) {
+      cleanChannelsMap[c.id] = c;
+    }
+
+    // 5. Deduplicate Uncategorized Channels
+    // Channels categorized in any folder are prioritized; redundant uncategorized copies are deleted.
+    let dupUncategorizedRemoved = 0;
+    const cleanUncategorized = [];
+
+    for (const u of uncategorizedChannels) {
+      const uId = resolveToCanonicalId(u.id || u.handle || u);
+      if (!uId) continue;
+
+      if (prioritizeCategorized && seenInAnyFolder.has(uId.toLowerCase())) {
+        dupUncategorizedRemoved++;
+      } else if (!seenInAnyFolder.has(uId.toLowerCase())) {
+        if (!cleanUncategorized.some(ex => ex.id.toLowerCase() === uId.toLowerCase())) {
+          const chObj = cleanChannelsMap[uId] || { id: uId, name: u.name || uId, handle: u.handle || '', avatarUrl: u.avatarUrl || '' };
+          cleanUncategorized.push(chObj);
+        } else {
+          dupUncategorizedRemoved++;
+        }
+      }
+    }
+
+    const totalRemoved = dupInSameFolder + dupAcrossFolders + dupUncategorizedRemoved;
+
+    return {
+      cleanFolders,
+      cleanChannelsMap,
+      cleanUncategorized,
+      removedCount: totalRemoved,
+      stats: {
+        dupInSameFolder,
+        dupAcrossFolders,
+        dupUncategorizedRemoved
+      }
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Channel CRUD & Management
+  // ---------------------------------------------------------------------------
   async function addChannelToFolder(folderId, channelInfo) {
     const folders = await getFolders();
     const channels = await getChannels();
@@ -184,15 +427,36 @@ const YTFolderStorage = (() => {
     const chId = channelInfo.id || channelInfo.handle;
     if (!chId) return false;
 
-    if (!folder.channels.includes(chId)) {
-      folder.channels.push(chId);
+    // Check if channel already exists under an alias or handle
+    let canonicalId = chId;
+    const chNorm = normalizeHandle(chId);
+    const existing = Object.values(channels).find(c =>
+      (c.id && c.id.toLowerCase() === chId.toLowerCase()) ||
+      (c.handle && normalizeHandle(c.handle) === chNorm)
+    );
+    if (existing) {
+      canonicalId = existing.id || chId;
     }
 
-    channels[chId] = {
-      id: chId,
-      name: channelInfo.name || channels[chId]?.name || chId,
-      handle: channelInfo.handle || channels[chId]?.handle || '',
-      avatarUrl: channelInfo.avatarUrl || channels[chId]?.avatarUrl || ''
+    if (!Array.isArray(folder.channels)) {
+      folder.channels = [];
+    }
+
+    // Ensure no duplicate in this folder
+    const alreadyInFolder = folder.channels.some(id =>
+      id.toLowerCase() === canonicalId.toLowerCase() ||
+      (existing?.handle && normalizeHandle(id) === normalizeHandle(existing.handle))
+    );
+
+    if (!alreadyInFolder) {
+      folder.channels.push(canonicalId);
+    }
+
+    channels[canonicalId] = {
+      id: canonicalId,
+      name: channelInfo.name || existing?.name || canonicalId,
+      handle: channelInfo.handle || existing?.handle || (canonicalId.startsWith('@') ? canonicalId : ''),
+      avatarUrl: channelInfo.avatarUrl || existing?.avatarUrl || ''
     };
 
     await setRaw({
@@ -208,7 +472,14 @@ const YTFolderStorage = (() => {
     const folder = folders.find(f => f.id === folderId);
     if (!folder) return false;
 
-    folder.channels = folder.channels.filter(id => id !== channelId);
+    const normTarget = normalizeHandle(channelId);
+    folder.channels = folder.channels.filter(id => {
+      if (id === channelId) return false;
+      if (id.toLowerCase() === channelId.toLowerCase()) return false;
+      if (normTarget && normalizeHandle(id) === normTarget) return false;
+      return true;
+    });
+
     await setFolders(folders);
     return true;
   }
@@ -219,12 +490,15 @@ const YTFolderStorage = (() => {
     if (!folder) return false;
 
     const chId = channelInfo.id || channelInfo.handle;
-    // Check match by ID or handle
-    const exists = folder.channels.some(id => id === chId || (channelInfo.handle && id === channelInfo.handle));
+    const chNorm = normalizeHandle(channelInfo.handle || chId);
+
+    const exists = folder.channels.some(id =>
+      id.toLowerCase() === chId.toLowerCase() ||
+      (chNorm && normalizeHandle(id) === chNorm)
+    );
 
     if (exists) {
-      folder.channels = folder.channels.filter(id => id !== chId && id !== channelInfo.handle);
-      await setFolders(folders);
+      await removeChannelFromFolder(folderId, chId);
       return false; // Removed
     } else {
       await addChannelToFolder(folderId, channelInfo);
@@ -237,29 +511,39 @@ const YTFolderStorage = (() => {
     const channels = await getChannels();
     const matchedFolderIds = [];
 
-    const normHandle = channelHandle ? channelHandle.toLowerCase().replace('@', '') : '';
+    const normHandle = normalizeHandle(channelHandle);
     const normId = channelId ? channelId.toLowerCase() : '';
 
     for (const folder of folders) {
       if (!Array.isArray(folder.channels)) continue;
 
       let matched = false;
-      if (channelId && folder.channels.includes(channelId)) {
-        matched = true;
-      }
-      if (!matched && channelHandle && folder.channels.includes(channelHandle)) {
-        matched = true;
-      }
-      if (!matched && (normHandle || normId)) {
-        matched = folder.channels.some(chId => {
-          if (normId && chId.toLowerCase() === normId) return true;
-          const ch = channels[chId];
-          if (ch) {
-            const h = (ch.handle || '').toLowerCase().replace('@', '');
-            if (normHandle && h === normHandle) return true;
+      for (const chRef of folder.channels) {
+        if (!chRef) continue;
+        const refLower = chRef.toLowerCase();
+        const refNorm = normalizeHandle(chRef);
+
+        if (normId && refLower === normId) {
+          matched = true;
+          break;
+        }
+        if (normHandle && (refNorm === normHandle || refLower === '@' + normHandle)) {
+          matched = true;
+          break;
+        }
+
+        // Check via channels dictionary
+        const ch = channels[chRef];
+        if (ch) {
+          if (normId && ch.id && ch.id.toLowerCase() === normId) {
+            matched = true;
+            break;
           }
-          return false;
-        });
+          if (normHandle && ch.handle && normalizeHandle(ch.handle) === normHandle) {
+            matched = true;
+            break;
+          }
+        }
       }
 
       if (matched) {
@@ -272,21 +556,48 @@ const YTFolderStorage = (() => {
   async function getUncategorizedChannels() {
     const folders = await getFolders();
     const channels = await getChannels();
-    const assignedIds = new Set();
+    const assignedTokens = new Set();
 
     folders.forEach(f => {
       if (Array.isArray(f.channels)) {
-        f.channels.forEach(id => {
-          assignedIds.add(id);
-          const ch = channels[id];
-          if (ch && ch.handle) assignedIds.add(ch.handle);
+        f.channels.forEach(chRef => {
+          if (!chRef) return;
+          const refStr = String(chRef).trim();
+          assignedTokens.add(refStr.toLowerCase());
+          const nh = normalizeHandle(refStr);
+          if (nh) {
+            assignedTokens.add(nh);
+            assignedTokens.add('@' + nh);
+          }
+
+          const chObj = channels[refStr] || Object.values(channels).find(c =>
+            (c.id && c.id.toLowerCase() === refStr.toLowerCase()) ||
+            (c.handle && normalizeHandle(c.handle) === nh)
+          );
+          if (chObj) {
+            if (chObj.id) assignedTokens.add(chObj.id.toLowerCase());
+            if (chObj.handle) {
+              const chH = normalizeHandle(chObj.handle);
+              assignedTokens.add(chH);
+              assignedTokens.add('@' + chH);
+            }
+          }
         });
       }
     });
 
     const uncategorized = [];
-    for (const [id, ch] of Object.entries(channels)) {
-      if (!assignedIds.has(id) && (!ch.handle || !assignedIds.has(ch.handle))) {
+    const channelList = Array.isArray(channels) ? channels : Object.values(channels);
+
+    for (const ch of channelList) {
+      if (!ch) continue;
+      const idStr = ch.id ? String(ch.id).toLowerCase() : '';
+      const handleStr = ch.handle ? normalizeHandle(ch.handle) : '';
+
+      const isAssigned = (idStr && assignedTokens.has(idStr)) ||
+                         (handleStr && (assignedTokens.has(handleStr) || assignedTokens.has('@' + handleStr)));
+
+      if (!isAssigned) {
         uncategorized.push(ch);
       }
     }
@@ -300,14 +611,23 @@ const YTFolderStorage = (() => {
     for (const ch of channelsArray) {
       const id = ch.id || ch.handle;
       if (!id) continue;
-      if (!channels[id]) {
+
+      const normH = normalizeHandle(ch.handle || id);
+      const existingKey = Object.keys(channels).find(k =>
+        k.toLowerCase() === id.toLowerCase() ||
+        (channels[k].handle && normalizeHandle(channels[k].handle) === normH)
+      );
+
+      const targetKey = existingKey || id;
+      if (!existingKey) {
         newCount++;
       }
-      channels[id] = {
-        id: id,
-        name: ch.name || channels[id]?.name || id,
-        handle: ch.handle || channels[id]?.handle || '',
-        avatarUrl: ch.avatarUrl || channels[id]?.avatarUrl || ''
+
+      channels[targetKey] = {
+        id: channels[targetKey]?.id || id,
+        name: ch.name || channels[targetKey]?.name || id,
+        handle: ch.handle || channels[targetKey]?.handle || '',
+        avatarUrl: ch.avatarUrl || channels[targetKey]?.avatarUrl || ''
       };
     }
 
@@ -316,12 +636,15 @@ const YTFolderStorage = (() => {
     return { total: Object.keys(channels).length, newCount };
   }
 
+  // ---------------------------------------------------------------------------
+  // Backup Export, Import & Clean Duplicates
+  // ---------------------------------------------------------------------------
   async function exportData() {
     const folders = await getFolders();
     const channels = await getChannels();
     const settings = await getSettings();
     return JSON.stringify({
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       folders,
       channels,
@@ -329,24 +652,111 @@ const YTFolderStorage = (() => {
     }, null, 2);
   }
 
-  async function importData(jsonString) {
-    const parsed = JSON.parse(jsonString);
-    if (!parsed || (!parsed.folders && !parsed.channels)) {
+  async function importData(jsonString, options = {}) {
+    const parsed = typeof jsonString === 'string' ? JSON.parse(jsonString) : jsonString;
+    if (!parsed || (!parsed.folders && !parsed.channels && !Array.isArray(parsed))) {
       throw new Error('無效的備份格式');
     }
 
-    const folders = Array.isArray(parsed.folders) ? parsed.folders : [];
-    const channels = parsed.channels || {};
-    const settings = Object.assign({}, DEFAULT_SETTINGS, parsed.settings);
+    const mergeWithExisting = Boolean(options.mergeWithExisting);
+    const singleFolderMode = options.singleFolderMode !== false; // default true
+    const prioritizeCategorized = options.prioritizeCategorized !== false; // default true
+
+    let incomingFolders = [];
+    let incomingChannels = [];
+    let incomingUncategorized = [];
+
+    if (Array.isArray(parsed)) {
+      incomingChannels = parsed;
+    } else {
+      incomingFolders = Array.isArray(parsed.folders) ? parsed.folders : [];
+      incomingChannels = parsed.channels || [];
+      incomingUncategorized = Array.isArray(parsed.uncategorizedChannels) ? parsed.uncategorizedChannels : [];
+    }
+
+    let foldersToProcess = incomingFolders;
+    let channelsToProcess = incomingChannels;
+
+    if (mergeWithExisting) {
+      const existingFolders = await getFolders();
+      const existingChannels = await getChannels();
+
+      const mergedFoldersMap = new Map();
+      existingFolders.forEach(f => {
+        mergedFoldersMap.set(f.id, { ...f, channels: [...(f.channels || [])] });
+      });
+
+      incomingFolders.forEach(f => {
+        if (mergedFoldersMap.has(f.id)) {
+          const ex = mergedFoldersMap.get(f.id);
+          ex.channels = [...ex.channels, ...(f.channels || [])];
+        } else {
+          const matchByName = Array.from(mergedFoldersMap.values()).find(ex =>
+            ex.name.trim().toLowerCase() === (f.name || '').trim().toLowerCase()
+          );
+          if (matchByName) {
+            matchByName.channels = [...matchByName.channels, ...(f.channels || [])];
+          } else {
+            mergedFoldersMap.set(f.id, { ...f, channels: [...(f.channels || [])] });
+          }
+        }
+      });
+
+      foldersToProcess = Array.from(mergedFoldersMap.values());
+      channelsToProcess = [existingChannels, incomingChannels];
+    }
+
+    const dedupResult = deduplicateData({
+      folders: foldersToProcess,
+      channels: channelsToProcess,
+      uncategorizedChannels: incomingUncategorized,
+      options: { singleFolderMode, prioritizeCategorized }
+    });
+
+    const currentSettings = await getSettings();
+    const settings = Object.assign({}, currentSettings, parsed.settings || {});
 
     await setRaw({
-      [STORAGE_KEYS.FOLDERS]: folders,
-      [STORAGE_KEYS.CHANNELS]: channels,
+      [STORAGE_KEYS.FOLDERS]: dedupResult.cleanFolders,
+      [STORAGE_KEYS.CHANNELS]: dedupResult.cleanChannelsMap,
       [STORAGE_KEYS.SETTINGS]: settings,
       [STORAGE_KEYS.INITIALIZED]: true
     });
+
     notifyChange();
-    return { folderCount: folders.length, channelCount: Object.keys(channels).length };
+
+    return {
+      folderCount: dedupResult.cleanFolders.length,
+      channelCount: Object.keys(dedupResult.cleanChannelsMap).length,
+      removedDuplicates: dedupResult.removedCount,
+      stats: dedupResult.stats
+    };
+  }
+
+  // Standalone duplicate cleaner for current storage
+  async function cleanDuplicates(singleFolderMode = true) {
+    const folders = await getFolders();
+    const channels = await getChannels();
+
+    const dedupResult = deduplicateData({
+      folders,
+      channels,
+      options: { singleFolderMode, prioritizeCategorized: true }
+    });
+
+    await setRaw({
+      [STORAGE_KEYS.FOLDERS]: dedupResult.cleanFolders,
+      [STORAGE_KEYS.CHANNELS]: dedupResult.cleanChannelsMap
+    });
+
+    notifyChange();
+
+    return {
+      folderCount: dedupResult.cleanFolders.length,
+      channelCount: Object.keys(dedupResult.cleanChannelsMap).length,
+      removedCount: dedupResult.removedCount,
+      stats: dedupResult.stats
+    };
   }
 
   function notifyChange() {
@@ -375,6 +785,8 @@ const YTFolderStorage = (() => {
     getFoldersByChannel,
     getUncategorizedChannels,
     batchAddChannels,
+    deduplicateData,
+    cleanDuplicates,
     exportData,
     importData
   };
