@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnDeleteActiveFolder = document.getElementById('btn-delete-active-folder');
   const btnExportBackup = document.getElementById('btn-export-backup');
   const btnImportBackup = document.getElementById('btn-import-backup');
+  const btnCleanDuplicates = document.getElementById('btn-clean-duplicates');
 
   // Modals
   const folderModal = document.getElementById('folder-modal');
@@ -436,15 +437,70 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
+    const modeEl = document.querySelector('input[name="import-mode"]:checked');
+    const importMode = modeEl ? modeEl.value : 'overwrite';
+    const optDedupCategorized = document.getElementById('import-opt-dedup-categorized')?.checked !== false;
+    const optSingleFolder = document.getElementById('import-opt-single-folder')?.checked !== false;
+
     try {
-      const res = await YTFolderStorage.importData(content);
-      alert(`備份匯入成功！共載入 ${res.folderCount} 個分組及 ${res.channelCount} 個頻道資料。`);
+      const res = await YTFolderStorage.importData(content, {
+        mergeWithExisting: importMode === 'merge',
+        prioritizeCategorized: optDedupCategorized,
+        singleFolderMode: optSingleFolder
+      });
+
+      let msg = `🎉 備份匯入成功！\n`;
+      msg += `• 模式：${importMode === 'merge' ? '與現有分組合併' : '覆蓋現有分組'}\n`;
+      msg += `• 分組總數：${res.folderCount} 組\n`;
+      msg += `• 頻道總數：${res.channelCount} 個\n`;
+
+      if (res.removedDuplicates > 0) {
+        msg += `• 自動清理重複：${res.removedDuplicates} 個（已分類頻道優先保留）\n`;
+        if (res.stats) {
+          if (res.stats.dupUncategorizedRemoved > 0) {
+            msg += `  - 清理已分類之未分類重複：${res.stats.dupUncategorizedRemoved} 個\n`;
+          }
+          if (res.stats.dupAcrossFolders > 0) {
+            msg += `  - 清理跨分組重複：${res.stats.dupAcrossFolders} 個\n`;
+          }
+          if (res.stats.dupInSameFolder > 0) {
+            msg += `  - 清理同分組內重複：${res.stats.dupInSameFolder} 個\n`;
+          }
+        }
+      } else {
+        msg += `• 重複檢查：無多餘重複頻道。\n`;
+      }
+
+      alert(msg);
       importModal.classList.remove('show');
       await loadData();
     } catch (err) {
       alert('匯入失敗，請確認 JSON 格式是否正確: ' + err.message);
     }
   };
+
+  if (btnCleanDuplicates) {
+    btnCleanDuplicates.onclick = async () => {
+      if (confirm('確定要檢查並清理目前儲存庫中的重複頻道嗎？\n\n清理規則：\n1. 優先保留已加入分組（已分類）的頻道\n2. 自動清除同分組與跨分組的重複頻道項目\n3. 自動清除未分類頻道中已被歸類的重複項')) {
+        try {
+          const res = await YTFolderStorage.cleanDuplicates(true);
+          let msg = `🧹 清理完成！\n• 目前分組數：${res.folderCount} 組\n• 頻道總數：${res.channelCount} 個\n`;
+          if (res.removedCount > 0) {
+            msg += `• 共清理了 ${res.removedCount} 個重複項目：\n`;
+            if (res.stats.dupUncategorizedRemoved > 0) msg += `  - 刪除已分類之未分類重複：${res.stats.dupUncategorizedRemoved} 個\n`;
+            if (res.stats.dupAcrossFolders > 0) msg += `  - 刪除跨分組重複：${res.stats.dupAcrossFolders} 個\n`;
+            if (res.stats.dupInSameFolder > 0) msg += `  - 刪除同分組內重複：${res.stats.dupInSameFolder} 個\n`;
+          } else {
+            msg += `• 檢查完畢：未發現任何重複頻道。`;
+          }
+          alert(msg);
+          await loadData();
+        } catch (err) {
+          alert('清理過程中發生錯誤: ' + err.message);
+        }
+      }
+    };
+  }
 
   // Initial Load
   await loadData();

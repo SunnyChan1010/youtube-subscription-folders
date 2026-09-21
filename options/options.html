@@ -17,6 +17,10 @@
       </div>
     </div>
     <div class="header-actions">
+      <button class="btn btn-secondary" id="btn-clean-duplicates" title="檢查並清理重複頻道，以已分類優先保留">
+        <span>🧹</span>
+        <span>清理重複</span>
+      </button>
       <button class="btn btn-secondary" id="btn-export-backup" title="將所有分組與頻道匯出成備份檔案">
         <span>💾</span>
         <span>匯出備份 (JSON)</span>
@@ -100,7 +104,7 @@
 
   <!-- Backup Import Modal -->
   <div class="modal-overlay" id="import-modal">
-    <div class="modal-content">
+    <div class="modal-content" style="width: 520px;">
       <div class="modal-title">匯入分組備份 (JSON)</div>
       <div class="form-group">
         <label class="form-label">選擇本機 JSON 檔案</label>
@@ -108,7 +112,31 @@
       </div>
       <div class="form-group">
         <label class="form-label">或直接貼上備份 JSON 代碼</label>
-        <textarea id="import-textarea" class="input-text" style="height: 140px; resize: vertical; font-family: monospace; font-size: 12px;" placeholder="{ &quot;folders&quot;: [...], &quot;channels&quot;: [...] }"></textarea>
+        <textarea id="import-textarea" class="input-text" style="height: 100px; resize: vertical; font-family: monospace; font-size: 12px;" placeholder="{ &quot;folders&quot;: [...], &quot;channels&quot;: [...] }"></textarea>
+      </div>
+      <div class="form-group" style="gap: 8px; margin-top: 4px;">
+        <label class="form-label">匯入方式</label>
+        <div style="display: flex; gap: 20px; font-size: 13px;">
+          <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="radio" name="import-mode" value="overwrite" checked />
+            <span>覆蓋現有分組</span>
+          </label>
+          <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="radio" name="import-mode" value="merge" />
+            <span>與現有分組合併</span>
+          </label>
+        </div>
+      </div>
+      <div class="form-group" style="gap: 8px; margin-top: 4px; padding: 10px 12px; background: rgba(255,255,255,0.04); border-radius: 8px; border: 1px solid var(--border);">
+        <label class="form-label" style="color: #ff4d4f; font-weight: 600;">✨ 重複檢查與清理規則</label>
+        <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+          <input type="checkbox" id="import-opt-dedup-categorized" checked />
+          <span>以已分類的頻道優先保留，自動刪除未分類之多餘重複項</span>
+        </label>
+        <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+          <input type="checkbox" id="import-opt-single-folder" checked />
+          <span>嚴格單一分組模式（若頻道出現在多個分組，僅保留於首個分組）</span>
+        </label>
       </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="import-btn-cancel">取消</button>
