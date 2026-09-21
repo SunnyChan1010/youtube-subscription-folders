@@ -272,7 +272,8 @@ const YTFolderStorage = (() => {
           id: rawId || (rawHandle.startsWith('@') ? rawHandle : '@' + rawHandle),
           handle: rawHandle ? (rawHandle.startsWith('@') ? rawHandle : '@' + rawHandle) : '',
           name: rawName || rawHandle || rawId,
-          avatarUrl: rawAvatar
+          avatarUrl: rawAvatar,
+          isSubscribed: Boolean(raw.isSubscribed)
         };
         canonicalList.push(canon);
       } else {
@@ -288,6 +289,9 @@ const YTFolderStorage = (() => {
         }
         if (rawName && (!canon.name || canon.name.startsWith('@') || canon.name.startsWith('UC'))) {
           canon.name = rawName;
+        }
+        if (raw.isSubscribed) {
+          canon.isSubscribed = true;
         }
       }
 
@@ -627,13 +631,39 @@ const YTFolderStorage = (() => {
         id: channels[targetKey]?.id || id,
         name: ch.name || channels[targetKey]?.name || id,
         handle: ch.handle || channels[targetKey]?.handle || '',
-        avatarUrl: ch.avatarUrl || channels[targetKey]?.avatarUrl || ''
+        avatarUrl: ch.avatarUrl || channels[targetKey]?.avatarUrl || '',
+        isSubscribed: ch.isSubscribed !== undefined ? ch.isSubscribed : (channels[targetKey]?.isSubscribed || false)
       };
     }
 
     await setRaw({ [STORAGE_KEYS.CHANNELS]: channels });
     notifyChange();
     return { total: Object.keys(channels).length, newCount };
+  }
+
+  async function setChannelSubscribed(channelId, isSubscribed = true) {
+    const channels = await getChannels();
+    const ch = channels[channelId];
+    if (ch) {
+      ch.isSubscribed = isSubscribed;
+      await setChannels(channels);
+      return true;
+    }
+    return false;
+  }
+
+  async function batchUpdateChannels(updates) {
+    const channels = await getChannels();
+    for (const u of updates) {
+      const id = u.id || u.handle;
+      if (!id) continue;
+      if (channels[id]) {
+        Object.assign(channels[id], u);
+      } else {
+        channels[id] = u;
+      }
+    }
+    await setChannels(channels);
   }
 
   // ---------------------------------------------------------------------------
@@ -728,6 +758,8 @@ const YTFolderStorage = (() => {
     return {
       folderCount: dedupResult.cleanFolders.length,
       channelCount: Object.keys(dedupResult.cleanChannelsMap).length,
+      channelsList: Object.values(dedupResult.cleanChannelsMap),
+      cleanFolders: dedupResult.cleanFolders,
       removedDuplicates: dedupResult.removedCount,
       stats: dedupResult.stats
     };
@@ -785,6 +817,8 @@ const YTFolderStorage = (() => {
     getFoldersByChannel,
     getUncategorizedChannels,
     batchAddChannels,
+    setChannelSubscribed,
+    batchUpdateChannels,
     deduplicateData,
     cleanDuplicates,
     exportData,
