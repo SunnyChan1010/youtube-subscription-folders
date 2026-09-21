@@ -18,6 +18,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   let allChannels = {};
   let currentSettings = {};
 
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   async function refreshData() {
     allFolders = await YTFolderStorage.getFolders();
     allChannels = await YTFolderStorage.getChannels();
@@ -44,7 +54,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           <div class="folder-card-main">
             <span class="folder-card-icon">${folder.icon || '📁'}</span>
             <div class="folder-card-info">
-              <div class="folder-card-name">${folder.name}</div>
+              <div class="folder-card-name">${escapeHtml(folder.name)}</div>
               <div class="folder-card-meta">${count} 個頻道</div>
             </div>
           </div>
@@ -104,7 +114,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           <div class="folder-card-main">
             <span class="folder-card-icon">${folder.icon || '📁'}</span>
             <div class="folder-card-info">
-              <div class="folder-card-name">${folder.name}</div>
+              <div class="folder-card-name">${escapeHtml(folder.name)}</div>
               <div class="folder-card-meta">${count} 個頻道</div>
             </div>
           </div>
@@ -149,7 +159,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         let foldersHtml = '';
         if (inFolders.length > 0) {
           foldersHtml = inFolders.map(f =>
-            `<span class="search-folder-tag" data-folder-id="${f.id}" title="點擊在動態牆只看此分組">${f.icon || '📁'} ${f.name}</span>`
+            `<span class="search-folder-tag" data-folder-id="${f.id}" title="點擊在動態牆只看此分組">${f.icon || '📁'} ${escapeHtml(f.name)}</span>`
           ).join('');
         } else {
           foldersHtml = `<span class="search-folder-tag unassigned">尚未加入任何分組</span>`;
@@ -160,8 +170,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           <div class="search-result-top">
             <img class="search-result-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
             <div class="search-result-info">
-              <div class="search-result-name">${ch.name || ch.handle}</div>
-              <div class="search-result-handle">${ch.handle || ch.id}</div>
+              <div class="search-result-name">${escapeHtml(ch.name || ch.handle)}</div>
+              <div class="search-result-handle">${escapeHtml(ch.handle || ch.id)}</div>
             </div>
           </div>
           <div class="search-result-folders-wrap">

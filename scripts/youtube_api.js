@@ -368,10 +368,10 @@ const YTSubscriptionService = (() => {
         const json = await resp.json();
         extractChannelsFromBrowseData(json, channelIds, handles, channelsMap);
 
-        // Continuation pagination: fetch subsequent pages (up to 10 pages for 1000+ channels)
+        // Continuation pagination: fetch subsequent pages (up to 35 pages for 1500+ channels)
         let continuationToken = extractContinuationToken(json);
         let pageCount = 0;
-        const maxPages = 10;
+        const maxPages = 35;
 
         while (continuationToken && pageCount < maxPages) {
           pageCount++;

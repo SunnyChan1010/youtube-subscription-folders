@@ -61,6 +61,54 @@ document.addEventListener('DOMContentLoaded', async () => {
   const unsubModalBtnSkip = document.getElementById('unsub-modal-btn-skip');
   const unsubModalBtnConfirm = document.getElementById('unsub-modal-btn-confirm');
 
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function parseYouTubeChannelInput(input) {
+    if (!input) return null;
+    const trimmed = String(input).trim();
+
+    // Support full YouTube URLs
+    try {
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.includes('youtube.com/')) {
+        const urlObj = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+        const path = urlObj.pathname;
+
+        const handleMatch = path.match(/^\/(@[^\/\?]+)/);
+        if (handleMatch) {
+          return { id: handleMatch[1], handle: handleMatch[1] };
+        }
+
+        const channelMatch = path.match(/^\/channel\/(UC[a-zA-Z0-9_-]{22})/);
+        if (channelMatch) {
+          return { id: channelMatch[1], handle: '' };
+        }
+
+        const customMatch = path.match(/^\/(?:c|user)\/([^\/\?]+)/);
+        if (customMatch) {
+          return { id: `@${customMatch[1]}`, handle: `@${customMatch[1]}` };
+        }
+      }
+    } catch (e) {}
+
+    if (trimmed.startsWith('@')) {
+      return { id: trimmed, handle: trimmed };
+    }
+    if (/^UC[a-zA-Z0-9_-]{22}$/.test(trimmed)) {
+      return { id: trimmed, handle: '' };
+    }
+
+    const cleanHandle = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+    return { id: cleanHandle, handle: cleanHandle };
+  }
+
   async function loadData() {
     allFolders = await YTFolderStorage.getFolders();
     allChannels = await YTFolderStorage.getChannels();
@@ -91,7 +139,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         <div class="folder-item-left">
           <span class="folder-item-icon">${folder.icon || '📁'}</span>
           <div class="folder-item-details">
-            <div class="folder-item-name">${folder.name}</div>
+            <div class="folder-item-name">${escapeHtml(folder.name)}</div>
             <div class="folder-item-meta">${count} 個頻道</div>
           </div>
         </div>
@@ -203,13 +251,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         const defaultAvatar = 'https://www.gstatic.com/youtube/img/creator/avatar/default_avatar_72.png';
         const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
 
-        const folderOptions = allFolders.map(f => `<option value="${f.id}">${f.icon || '📁'} ${f.name}</option>`).join('');
+        const folderOptions = allFolders.map(f => `<option value="${f.id}">${f.icon || '📁'} ${escapeHtml(f.name)}</option>`).join('');
 
         card.innerHTML = `
           <img class="channel-card-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
           <div class="channel-card-info">
-            <a class="channel-card-title" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${ch.name || ch.handle || ch.id}</a>
-            <div class="channel-card-handle">${ch.handle || ch.id}</div>
+            <a class="channel-card-title" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
+            <div class="channel-card-handle">${escapeHtml(ch.handle || ch.id)}</div>
           </div>
           <div class="channel-card-actions">
             <select class="select-folder-assign input-text" style="padding: 4px 8px; font-size: 12px; width: 140px;">
@@ -287,8 +335,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       card.innerHTML = `
         <img class="channel-card-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
         <div class="channel-card-info">
-          <a class="channel-card-title" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${ch.name || ch.handle || ch.id}</a>
-          <div class="channel-card-handle">${ch.handle || ch.id}</div>
+          <a class="channel-card-title" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
+          <div class="channel-card-handle">${escapeHtml(ch.handle || ch.id)}</div>
         </div>
         <div class="channel-card-actions">
           <button class="btn-icon-sm btn-remove-channel" title="自此分組移除">✕</button>
@@ -371,21 +419,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     const inputVal = inputAddChannelHandle.value.trim();
     if (!inputVal) return;
 
-    let handle = inputVal;
-    let id = inputVal;
+    const parsed = parseYouTubeChannelInput(inputVal);
+    if (!parsed) return;
 
-    if (inputVal.startsWith('@')) {
-      handle = inputVal;
-      const existingCh = Object.values(allChannels).find(c => c.handle && c.handle.toLowerCase() === inputVal.toLowerCase());
-      if (existingCh) {
-        id = existingCh.id;
-      }
+    let { id, handle } = parsed;
+
+    // Cross-reference with existing channels dictionary
+    const normH = handle ? handle.replace(/^@/, '').toLowerCase() : '';
+    const normId = id ? id.toLowerCase() : '';
+
+    const existingCh = Object.values(allChannels).find(c =>
+      (normId && c.id && c.id.toLowerCase() === normId) ||
+      (normH && c.handle && c.handle.replace(/^@/, '').toLowerCase() === normH)
+    );
+
+    if (existingCh) {
+      id = existingCh.id || id;
+      handle = existingCh.handle || handle;
     }
 
     await YTFolderStorage.addChannelToFolder(activeFolderId, {
       id,
-      handle: handle.startsWith('@') ? handle : `@${handle}`,
-      name: handle
+      handle: handle ? (handle.startsWith('@') ? handle : `@${handle}`) : '',
+      name: existingCh?.name || handle || id
     });
 
     inputAddChannelHandle.value = '';
@@ -448,6 +504,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
+  // Drag-and-drop support for JSON backup files
+  ['dragenter', 'dragover'].forEach(eventName => {
+    importTextarea.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      importTextarea.style.borderColor = '#2196f3';
+      importTextarea.style.background = 'rgba(33, 150, 243, 0.08)';
+    });
+  });
+
+  ['dragleave', 'drop'].forEach(eventName => {
+    importTextarea.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      importTextarea.style.borderColor = '';
+      importTextarea.style.background = '';
+    });
+  });
+
+  importTextarea.addEventListener('drop', (e) => {
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        importTextarea.value = event.target.result;
+      };
+      reader.readAsText(file);
+    }
+  });
+
   /**
    * Prompts user with a modal to select which redundant channels to unsubscribe from
    */
@@ -493,8 +579,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           <input type="checkbox" class="unsub-channel-checkbox" id="unsub-chk-${idx}" checked />
           <img class="unsub-channel-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
           <div class="unsub-channel-info">
-            <a class="unsub-channel-name" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${ch.name || ch.handle || ch.id}</a>
-            <div class="unsub-channel-handle">${ch.handle ? ch.handle : (ch.id || '')}</div>
+            <a class="unsub-channel-name" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
+            <div class="unsub-channel-handle">${escapeHtml(ch.handle ? ch.handle : (ch.id || ''))}</div>
           </div>
         `;
 

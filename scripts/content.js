@@ -20,6 +20,16 @@
   let currentDropdownChannelInfo = null;
   let currentDropdownTriggerBtn = null;
 
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   // ---------------------------------------------------------------------------
   // Data Loading
   // ---------------------------------------------------------------------------
@@ -88,12 +98,14 @@
     cachedFolders.forEach(folder => {
       const channelCount = folder.channels ? folder.channels.length : 0;
       const isFilterActive = (window.location.pathname.startsWith('/feed/subscriptions') && activeFilterFolderId === folder.id);
+      const safeDesc = escapeHtml(folder.description || folder.name);
+      const safeFolderName = escapeHtml(folder.name);
 
       html += `
         <li class="yt-org-folder-item" data-folder-id="${folder.id}">
-          <div class="yt-org-folder-row ${isFilterActive ? 'yt-org-active' : ''}" title="${folder.description || folder.name}">
+          <div class="yt-org-folder-row ${isFilterActive ? 'yt-org-active' : ''}" title="${safeDesc}">
             <span class="yt-org-folder-icon">${folder.icon || '📁'}</span>
-            <span class="yt-org-folder-name">${folder.name}</span>
+            <span class="yt-org-folder-name">${safeFolderName}</span>
             <span class="yt-org-folder-badge">${channelCount}</span>
             <span class="yt-org-folder-chevron">▶</span>
           </div>
@@ -105,11 +117,13 @@
           const ch = cachedChannels[chId] || { id: chId, name: chId, handle: '', avatarUrl: '' };
           const link = ch.handle ? `/${ch.handle}` : (ch.id ? `/channel/${ch.id}` : '#');
           const defaultAvatar = 'https://www.gstatic.com/youtube/img/creator/avatar/default_avatar_72.png';
+          const safeChTitle = escapeHtml(ch.name || ch.handle || '頻道');
+          const safeChTooltip = escapeHtml(ch.name || ch.handle || '');
           html += `
             <li>
-              <a href="${link}" class="yt-org-channel-item" title="${ch.name || ch.handle || ''}">
+              <a href="${link}" class="yt-org-channel-item" title="${safeChTooltip}">
                 <img class="yt-org-channel-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
-                <span class="yt-org-channel-title">${ch.name || ch.handle || '頻道'}</span>
+                <span class="yt-org-channel-title">${safeChTitle}</span>
               </a>
             </li>
           `;
@@ -232,7 +246,7 @@
       chipsHtml += `
         <button class="yt-org-chip ${isActive ? 'active' : ''}" data-folder-id="${folder.id}">
           <span>${folder.icon || '📁'}</span>
-          <span>${folder.name}</span>
+          <span>${escapeHtml(folder.name)}</span>
           <span class="yt-org-chip-badge">(${count})</span>
         </button>
       `;
@@ -483,20 +497,22 @@
     currentDropdownTriggerBtn = btn;
 
     const memberFolderIds = await YTFolderStorage.getFoldersByChannel(channelInfo.id, channelInfo.handle);
+    const safeChannelDisplayName = escapeHtml(channelInfo.name || channelInfo.handle);
 
     dropdown.innerHTML = `
       <div class="yt-org-dropdown-header">
-        <span>選擇「${channelInfo.name || channelInfo.handle}」的分組</span>
+        <span>選擇「${safeChannelDisplayName}」的分組</span>
         <span style="font-size: 12px; cursor: pointer; color: #ff0033;" id="yt-org-floating-dropdown-close">關閉 ✕</span>
       </div>
       <div class="yt-org-dropdown-list">
         ${cachedFolders.map(folder => {
           const isChecked = memberFolderIds.includes(folder.id);
+          const safeFolderName = escapeHtml(folder.name);
           return `
             <label class="yt-org-dropdown-item">
               <input type="checkbox" class="yt-org-floating-folder-checkbox" data-folder-id="${folder.id}" ${isChecked ? 'checked' : ''} />
               <span>${folder.icon || '📁'}</span>
-              <span class="yt-org-dropdown-item-name">${folder.name}</span>
+              <span class="yt-org-dropdown-item-name">${safeFolderName}</span>
             </label>
           `;
         }).join('')}
@@ -589,15 +605,14 @@
     const existing = document.getElementById('yt-org-channel-tagger-wrapper');
 
     if (existing) {
-      // If wrapper already exists for the exact current channel, refresh appearance & return
+      // If wrapper already exists for the exact current channel, it is already rendered; return immediately to avoid repeating storage reads
       if (existing.dataset.channelKey === channelKey) {
-        const btn = existing.querySelector('#yt-org-tagger-toggle-btn');
-        if (btn) {
-          updateTaggerButtonAppearance(btn, channelInfo);
-        }
         return;
       }
       // Stale wrapper from previous video/channel (SPA navigation) -> remove and recreate cleanly
+      if (globalFloatingDropdown && globalFloatingDropdown.classList.contains('show')) {
+        globalFloatingDropdown.classList.remove('show');
+      }
       existing.remove();
     }
 
@@ -762,6 +777,9 @@
   // Master Lifecycle Handler
   // ---------------------------------------------------------------------------
   async function onPageUpdate() {
+    if (globalFloatingDropdown && globalFloatingDropdown.classList.contains('show')) {
+      globalFloatingDropdown.classList.remove('show');
+    }
     await loadData();
     injectSidebarSection();
     checkAndInjectFeedFilter();
