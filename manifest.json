@@ -42,6 +42,7 @@
       "js": [
         "scripts/initial_data.js",
         "scripts/storage.js",
+        "scripts/youtube_api.js",
         "scripts/content.js"
       ],
       "css": [
