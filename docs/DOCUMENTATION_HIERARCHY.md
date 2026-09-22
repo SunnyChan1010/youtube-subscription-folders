@@ -7,12 +7,15 @@ youtube-subscription-folders/
 ├── README.md                           # [用戶] 面向終端使用者與開源社群之產品說明與安裝指南
 └── docs/
     ├── DOCUMENTATION_HIERARCHY.md      # [導航] 本文檔：全域文檔架構與檢索職責分工
+    ├── VERSIONING.md                   # [發布] 語意化版本 (SemVer) 遞增、Conventional Commits 與發布 SOP
     ├── adr/                            # [架構決策] Architecture Decision Records
     │   ├── ADR_TEMPLATE.md             # AI 優化版架構決策記錄模版
     │   ├── 0001-innertube-hybrid-execution-routing.md # ADR 0001: InnerTube 混合上下文執行路由
     │   └── 0002-zero-dependency-mv3-architecture.md   # ADR 0002: 零依賴原生 MV3 架構決策
     ├── api/                            # [協議規範] API & Protocol Specifications
     │   └── innertube_protocol_spec.md  # YouTube InnerTube 逆向通訊協議與資料結構規範
+    ├── audit/                          # [工程審計] Compute, Token & Cost Audits
+    │   └── PROJECT_METRICS_AUDIT.md    # 專案算力資源、Token 用量與營運成本審計報告
     └── qa/                             # [驗證準則] Quality Assurance & Test Playbooks
         └── verification_playbook.md    # 自動化測試與實機測試覆蓋標準
 ```
@@ -28,6 +31,8 @@ youtube-subscription-folders/
 | `docs/adr/*.md` | **架構師 / AI Agent** | 記錄關鍵技術選型決策，解釋「為何選 A 而非 B/C」，防止 AI 進行無效重構或逆向選型。 | 涉及底層通訊、存儲結構、框架選擇時讀取；做出重大技術取捨時建立新 ADR。 |
 | `docs/api/*.md` | **開發者 / AI Agent** | 定義 YouTube InnerTube 協議端點封包、Cookie 鑑權結構、參數 Payload 與錯誤碼處理。 | 修改 `scripts/youtube_api.js` 前必讀；YouTube 協議變更時更新。 |
 | `docs/qa/*.md` | **測試者 / AI Agent** | 提供端到端驗證清單、自動化測試命令、邊界測試案例集。 | 在提交任何代碼前執行自檢時查閱。 |
+| `docs/audit/*.md` | **專案管理 / 審計者** | 記錄會話算力、Token 用量、工具調用次數與營運成本估算，作為工程歷史存檔。 | 每個里程碑或大型重構完成後更新審計數據。 |
+| `docs/VERSIONING.md` | **發布者 / AI Agent** | 定義 SemVer 2.0.0 規範、Conventional Commits 提交規則與自動化發布命令。 | 準備發布新版本或建立 Release 時查閱。 |
 | `README.md` | **終端使用者 / 社群** | 提供擴充功能特點、Chrome 手動安裝步驟、備份資料夾說明。 | 僅在新增重大使用者面向功能或發布新版本時更新。 |
 
 ---
