@@ -168,9 +168,8 @@ const YTSubscriptionService = (() => {
       }
     }
 
-    // Default fallback public client key if all scraping failed
     if (!apiKey) {
-      apiKey = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+      console.warn('[YTSubscriptionService] Unable to dynamically detect YouTube INNERTUBE_API_KEY from page or tabs.');
     }
 
     cachedSession = {
