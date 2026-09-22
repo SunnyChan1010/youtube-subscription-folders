@@ -3,6 +3,15 @@
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Safe image error fallback (replaces inline onerror CSP violation)
+  document.addEventListener('error', (e) => {
+    if (e.target && e.target.tagName === 'IMG' && e.target.dataset.defaultSrc) {
+      if (e.target.src !== e.target.dataset.defaultSrc) {
+        e.target.src = e.target.dataset.defaultSrc;
+      }
+    }
+  }, true);
+
   await YTFolderStorage.init();
 
   const folderListEl = document.getElementById('folder-list');
@@ -168,7 +177,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const defaultAvatar = 'https://www.gstatic.com/youtube/img/creator/avatar/default_avatar_72.png';
         item.innerHTML = `
           <div class="search-result-top">
-            <img class="search-result-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
+            <img class="search-result-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
             <div class="search-result-info">
               <div class="search-result-name">${escapeHtml(ch.name || ch.handle)}</div>
               <div class="search-result-handle">${escapeHtml(ch.handle || ch.id)}</div>

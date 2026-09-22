@@ -122,7 +122,7 @@
           html += `
             <li>
               <a href="${link}" class="yt-org-channel-item" title="${safeChTooltip}">
-                <img class="yt-org-channel-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
+                <img class="yt-org-channel-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
                 <span class="yt-org-channel-title">${safeChTitle}</span>
               </a>
             </li>
@@ -799,7 +799,20 @@
     }
   });
 
+  // Safe image error handler (replaces inline onerror CSP violation)
+  document.addEventListener('error', (e) => {
+    if (e.target && e.target.tagName === 'IMG' && e.target.dataset.defaultSrc) {
+      if (e.target.src !== e.target.dataset.defaultSrc) {
+        e.target.src = e.target.dataset.defaultSrc;
+      }
+    }
+  }, true);
+
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.action === 'PING') {
+      sendResponse({ status: 'PONG', ready: true });
+      return false;
+    }
     if (msg.action === 'STORAGE_UPDATED') {
       onPageUpdate();
     }
@@ -829,6 +842,45 @@
       }
       sendResponse({ apiKey, clientVersion, visitorData });
       return false;
+    }
+    if (msg.action === 'EXEC_SUBSCRIBE') {
+      (async () => {
+        try {
+          const res = await YTSubscriptionService.executeSubscribeDirect(msg.channelId, msg.params);
+          sendResponse(res);
+        } catch (err) {
+          sendResponse({ success: false, error: err.message, channelId: msg.channelId });
+        }
+      })();
+      return true;
+    }
+    if (msg.action === 'EXEC_UNSUBSCRIBE') {
+      (async () => {
+        try {
+          const res = await YTSubscriptionService.executeUnsubscribeDirect(msg.channelId, msg.params);
+          sendResponse(res);
+        } catch (err) {
+          sendResponse({ success: false, error: err.message, channelId: msg.channelId });
+        }
+      })();
+      return true;
+    }
+    if (msg.action === 'EXEC_FETCH_SUBSCRIBED_CHANNELS') {
+      (async () => {
+        try {
+          const res = await YTSubscriptionService.executeFetchSubscribedChannelsDirect(msg.forceRefresh);
+          sendResponse({
+            success: true,
+            channelIds: Array.from(res.channelIds || []),
+            handles: Array.from(res.handles || []),
+            channelsList: res.channelsList || [],
+            isLoggedIn: res.isLoggedIn
+          });
+        } catch (err) {
+          sendResponse({ success: false, error: err.message });
+        }
+      })();
+      return true;
     }
     return false;
   });

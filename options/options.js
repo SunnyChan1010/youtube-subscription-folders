@@ -3,6 +3,15 @@
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Safe image error fallback (replaces inline onerror CSP violation)
+  document.addEventListener('error', (e) => {
+    if (e.target && e.target.tagName === 'IMG' && e.target.dataset.defaultSrc) {
+      if (e.target.src !== e.target.dataset.defaultSrc) {
+        e.target.src = e.target.dataset.defaultSrc;
+      }
+    }
+  }, true);
+
   await YTFolderStorage.init();
 
   let allFolders = [];
@@ -254,7 +263,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const folderOptions = allFolders.map(f => `<option value="${f.id}">${f.icon || '📁'} ${escapeHtml(f.name)}</option>`).join('');
 
         card.innerHTML = `
-          <img class="channel-card-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
+          <img class="channel-card-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
           <div class="channel-card-info">
             <a class="channel-card-title" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
             <div class="channel-card-handle">${escapeHtml(ch.handle || ch.id)}</div>
@@ -333,7 +342,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
 
       card.innerHTML = `
-        <img class="channel-card-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
+        <img class="channel-card-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
         <div class="channel-card-info">
           <a class="channel-card-title" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
           <div class="channel-card-handle">${escapeHtml(ch.handle || ch.id)}</div>
@@ -577,7 +586,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         row.innerHTML = `
           <input type="checkbox" class="unsub-channel-checkbox" id="unsub-chk-${idx}" checked />
-          <img class="unsub-channel-avatar" src="${ch.avatarUrl || defaultAvatar}" onerror="this.src='${defaultAvatar}'" />
+          <img class="unsub-channel-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
           <div class="unsub-channel-info">
             <a class="unsub-channel-name" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
             <div class="unsub-channel-handle">${escapeHtml(ch.handle ? ch.handle : (ch.id || ''))}</div>
@@ -734,6 +743,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 autoSubSummary = `\n• YouTube 訂閱同步：\n  - 原已訂閱：${cmp.subscribed.length} 個\n  - 本次自動新增訂閱：${batchResult.succeeded} 個`;
                 if (batchResult.failed > 0) {
                   autoSubSummary += `\n  - 略過或未完成：${batchResult.failed} 個`;
+                  const hasAuthError = batchResult.results.some(r => r.result && (r.result.error === 'SESSION_EXPIRED' || r.result.error === 'NOT_LOGGED_IN'));
+                  if (hasAuthError) {
+                    autoSubSummary += ` (原因：YouTube 登入階段已過期或未登入，請先於 YouTube 登入帳號)`;
+                  }
                 }
                 if (isSubscribeAborted) {
                   autoSubSummary += ` (用戶已中斷剩餘訂閱)`;
@@ -791,6 +804,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                   unsubSummary = `\n• YouTube 訂閱清理（取消訂閱）：\n  - 備份已刪除之訂閱頻道：${cmp.redundantSubscribed.length} 個\n  - 本次成功取消訂閱：${unsubBatchResult.succeeded} 個`;
                   if (unsubBatchResult.failed > 0) {
                     unsubSummary += `\n  - 略過或未完成：${unsubBatchResult.failed} 個`;
+                    const hasUnsubAuthError = unsubBatchResult.results.some(r => r.result && (r.result.error === 'SESSION_EXPIRED' || r.result.error === 'NOT_LOGGED_IN'));
+                    if (hasUnsubAuthError) {
+                      unsubSummary += ` (原因：YouTube 登入階段已過期或未登入，請先於 YouTube 登入帳號)`;
+                    }
                   }
                   if (isSubscribeAborted) {
                     unsubSummary += ` (用戶已中斷剩餘處理)`;
