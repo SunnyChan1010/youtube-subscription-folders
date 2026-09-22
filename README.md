@@ -10,7 +10,7 @@
 
 <p align="center">
   <strong>一款輕量、高效、注重隱私的 YouTube 訂閱頻道分組與管理 Chrome 擴充套件（Manifest V3）。</strong><br />
-  融合 <strong>QuickTube</strong> 的極簡側邊欄整合、<strong>FolderTube</strong> 的流暢現代體驗與 <strong>PocketTube</strong> 的強大動態牆過濾功能。
+  
 </p>
 
 <p align="center">
