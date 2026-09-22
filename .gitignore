@@ -12,3 +12,5 @@ organized_subscriptions.json
 # Local compute and token audit reports (not synced to GitHub)
 docs/audit/
 *.audit.md
+*AUDIT*.md
+PROJECT_METRICS_AUDIT.md
