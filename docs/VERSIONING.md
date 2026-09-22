@@ -70,3 +70,4 @@ node scripts/release.js major
 3. 自動自 `CHANGELOG.md` 提取該版本之變更摘要。
 4. 調用 GitHub REST API 在遠端倉庫自動建立 Git Tag（如 `v1.0.0`）。
 5. 自動於 GitHub 建立正式版 Release 發布頁面。
+6. **同步更新本地審計日誌**：於 `PROJECT_METRICS_AUDIT.md` 與 `docs/audit/PROJECT_METRICS_AUDIT.md` 流水帳中追加該版本之**本次變化 (Delta)** 與**變更後累計總數 (Cumulative Totals)**（受 `.gitignore` 保護，永不上傳 GitHub）。

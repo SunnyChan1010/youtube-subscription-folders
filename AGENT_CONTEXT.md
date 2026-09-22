@@ -189,3 +189,4 @@ sequenceDiagram
 2. **零運行時報錯**：在 Chrome 擴充管理頁面（`chrome://extensions`）中重新整理後，**錯誤按鈕必須不存在（0 Errors, 0 Warnings）**。
 3. **實機功能正常**：在 YouTube 頻道頁面與影片播放頁面均能正確注入按鈕並彈出分組選單。
 4. **Git 工作目錄整潔**：變更經過精確提交，遠端分支與本地完全同步。
+5. **版本審計同步 (Local Audit Ledger Sync)**：若涉及版本遞增，必須同步更新本地 `PROJECT_METRICS_AUDIT.md` 與 `docs/audit/PROJECT_METRICS_AUDIT.md` 流水帳，記錄本次變化 (Delta) 與變更後累計總數 (Cumulative Totals)（本地留存，不推送 GitHub）。
