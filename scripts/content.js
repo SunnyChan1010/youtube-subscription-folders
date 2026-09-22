@@ -208,26 +208,29 @@
       return;
     }
 
-    const richGrid = document.querySelector('ytd-browse[page-subtype="subscriptions"] ytd-rich-grid-renderer') ||
+    const feedGrid = document.querySelector('ytd-browse[page-subtype="subscriptions"] ytd-rich-grid-renderer') ||
                      document.querySelector('ytd-browse ytd-rich-grid-renderer') ||
+                     document.querySelector('ytd-browse[page-subtype="subscriptions"] ytd-two-column-browse-results-renderer #primary') ||
+                     document.querySelector('ytd-browse[page-subtype="subscriptions"] ytd-section-list-renderer') ||
+                     document.querySelector('ytd-browse[page-subtype="subscriptions"]') ||
                      document.querySelector('ytd-rich-grid-renderer');
-    if (!richGrid) return;
+    if (!feedGrid) return;
 
     let filterContainer = document.getElementById('yt-org-feed-filter-container');
     if (!filterContainer) {
       filterContainer = document.createElement('div');
       filterContainer.id = 'yt-org-feed-filter-container';
 
-      const contents = richGrid.querySelector('#contents');
+      const contents = feedGrid.querySelector('#contents') || feedGrid.querySelector('#primary') || feedGrid.firstElementChild;
       if (contents) {
         contents.parentNode.insertBefore(filterContainer, contents);
       } else {
-        richGrid.prepend(filterContainer);
+        feedGrid.prepend(filterContainer);
       }
     }
 
     renderFeedFilterBar(filterContainer);
-    setupFeedObserver(richGrid);
+    setupFeedObserver(feedGrid);
     applyFeedFilters();
   }
 
@@ -299,7 +302,7 @@
     if (feedObserver) {
       feedObserver.disconnect();
     }
-    const contentsEl = gridContainer.querySelector('#contents') || gridContainer;
+    const contentsEl = gridContainer.querySelector('#contents') || gridContainer.querySelector('#primary') || gridContainer;
     feedObserver = new MutationObserver(() => {
       applyFeedFilters();
     });
@@ -555,6 +558,16 @@
   // ---------------------------------------------------------------------------
   // 4. Channel Page & Video Watch Page Quick Tagger Button
   // ---------------------------------------------------------------------------
+  // 4. Channel Page & Video Watch Page Quick Tagger Button
+  // ---------------------------------------------------------------------------
+  function isVisibleActionElement(el) {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+    if (el.closest('.skeleton-bg-color, [class*="skeleton"], ytd-watch-flexy[hidden]')) return false;
+    return true;
+  }
+
   function checkAndInjectChannelTagger() {
     const pathname = window.location.pathname;
     const isChannelPage = pathname.startsWith('/@') || pathname.startsWith('/channel/') || pathname.startsWith('/c/') || pathname.startsWith('/user/');
@@ -570,31 +583,35 @@
     let channelInfo = null;
 
     if (isChannelPage) {
-      actionContainer =
-        document.querySelector('subscribe-button-view-model') ||
-        document.querySelector('yt-subscribe-button-view-model') ||
-        document.querySelector('.page-header-view-model-wiz__page-header-actions') ||
-        document.querySelector('yt-page-header-view-model .page-header-view-model-wiz__page-header-headline-info') ||
-        document.querySelector('yt-page-header-view-model') ||
-        document.querySelector('ytd-page-header-renderer #buttons') ||
-        document.querySelector('ytd-page-header-renderer #header-actions') ||
-        document.querySelector('ytd-c4-tabbed-header-renderer #subscribe-button') ||
-        document.querySelector('ytd-c4-tabbed-header-renderer #buttons') ||
-        document.querySelector('ytd-subscribe-button-renderer') ||
-        document.querySelector('#subscribe-button');
+      const candidates = [
+        ...document.querySelectorAll('.ytFlexibleActionsViewModelAction'),
+        ...document.querySelectorAll('yt-subscribe-button-view-model'),
+        ...document.querySelectorAll('subscribe-button-view-model'),
+        ...document.querySelectorAll('.page-header-view-model-wiz__page-header-actions'),
+        ...document.querySelectorAll('yt-page-header-view-model .page-header-view-model-wiz__page-header-headline-info'),
+        ...document.querySelectorAll('ytd-page-header-renderer #buttons'),
+        ...document.querySelectorAll('ytd-c4-tabbed-header-renderer #subscribe-button'),
+        ...document.querySelectorAll('ytd-subscribe-button-renderer'),
+        ...document.querySelectorAll('#subscribe-button')
+      ];
 
+      actionContainer = candidates.find(isVisibleActionElement) || candidates[0];
       if (!actionContainer) return;
       channelInfo = extractCurrentChannelInfo();
     } else if (isWatchPage) {
-      // Under video player
-      actionContainer =
-        document.querySelector('ytd-watch-metadata #owner #subscribe-button') ||
-        document.querySelector('#owner #subscribe-button') ||
-        document.querySelector('ytd-video-owner-renderer #subscribe-button') ||
-        document.querySelector('#owner subscribe-button-view-model') ||
-        document.querySelector('ytd-watch-flexy #owner') ||
-        document.querySelector('#owner');
+      // Under video player on watch page
+      const watchCandidates = [
+        ...document.querySelectorAll('ytd-watch-metadata #owner #subscribe-button'),
+        ...document.querySelectorAll('#owner #subscribe-button'),
+        ...document.querySelectorAll('ytd-video-owner-renderer #subscribe-button'),
+        ...document.querySelectorAll('#owner yt-subscribe-button-view-model'),
+        ...document.querySelectorAll('#owner subscribe-button-view-model'),
+        ...document.querySelectorAll('#owner ytd-subscribe-button-renderer'),
+        ...document.querySelectorAll('ytd-watch-metadata #owner'),
+        ...document.querySelectorAll('#owner')
+      ];
 
+      actionContainer = watchCandidates.find(isVisibleActionElement) || watchCandidates[0];
       if (!actionContainer) return;
       channelInfo = extractWatchPageChannelInfo();
     }
@@ -605,11 +622,12 @@
     const existing = document.getElementById('yt-org-channel-tagger-wrapper');
 
     if (existing) {
-      // If wrapper already exists for the exact current channel, it is already rendered; return immediately to avoid repeating storage reads
-      if (existing.dataset.channelKey === channelKey) {
+      const existingRect = existing.getBoundingClientRect();
+      const isRenderedAndVisible = existing.dataset.channelKey === channelKey && (existingRect.width > 0 && existingRect.height > 0);
+      if (isRenderedAndVisible) {
         return;
       }
-      // Stale wrapper from previous video/channel (SPA navigation) -> remove and recreate cleanly
+      // Stale or stuck in hidden skeleton -> remove and recreate cleanly
       if (globalFloatingDropdown && globalFloatingDropdown.classList.contains('show')) {
         globalFloatingDropdown.classList.remove('show');
       }
@@ -678,33 +696,80 @@
 
   function extractWatchPageChannelInfo() {
     const ownerEl = document.querySelector('#owner, ytd-video-owner-renderer');
-    if (!ownerEl) return null;
 
     let id = '';
     let handle = '';
     let name = '';
     let avatarUrl = '';
 
-    const linkEl = ownerEl.querySelector('a[href*="/@"], a[href*="/channel/"], #channel-name a');
-    if (linkEl) {
-      const href = linkEl.getAttribute('href') || '';
-      const handleMatch = href.match(/\/@([^\/\?]+)/);
-      if (handleMatch) {
-        handle = `@${handleMatch[1]}`;
+    // 1. Direct anchor inside owner
+    if (ownerEl) {
+      const linkEl = ownerEl.querySelector('a[href*="/@"], a[href*="/channel/"], #channel-name a');
+      if (linkEl) {
+        const href = linkEl.getAttribute('href') || '';
+        const handleMatch = href.match(/\/@([^\/\?]+)/);
+        if (handleMatch) {
+          handle = `@${handleMatch[1]}`;
+        }
+        const idMatch = href.match(/\/channel\/([^\/\?]+)/);
+        if (idMatch) {
+          id = idMatch[1];
+        }
+        name = linkEl.textContent?.trim() || '';
       }
-      const idMatch = href.match(/\/channel\/([^\/\?]+)/);
-      if (idMatch) {
-        id = idMatch[1];
-      }
-      name = linkEl.textContent?.trim() || '';
     }
 
-    const imgEl = ownerEl.querySelector('img');
-    if (imgEl) {
-      avatarUrl = imgEl.src || '';
+    // 2. Canonical author link in <head>
+    if (!handle && !id) {
+      const headAuthorLink = document.querySelector('link[itemprop="url"][href*="/@"], link[itemprop="url"][href*="/channel/"]');
+      if (headAuthorLink) {
+        const href = headAuthorLink.getAttribute('href') || '';
+        const handleMatch = href.match(/\/@([^\/\?]+)/);
+        if (handleMatch) {
+          handle = `@${handleMatch[1]}`;
+        }
+        const idMatch = href.match(/\/channel\/([^\/\?]+)/);
+        if (idMatch) {
+          id = idMatch[1];
+        }
+      }
     }
 
-    return { id: id || handle, name: name || handle, handle, avatarUrl };
+    // 3. Meta channelId in <head>
+    if (!id) {
+      const metaId = document.querySelector('meta[itemprop="channelId"]');
+      if (metaId && metaId.getAttribute('content')) {
+        id = metaId.getAttribute('content');
+      }
+    }
+
+    // 4. Channel name text
+    if (!name) {
+      const nameEl = ownerEl?.querySelector('#attributed-channel-name, #channel-name, ytd-channel-name') ||
+                     document.querySelector('ytd-watch-metadata #owner #upload-info') ||
+                     document.querySelector('link[itemprop="name"]');
+      if (nameEl) {
+        name = nameEl.getAttribute?.('content') || nameEl.textContent?.trim() || '';
+        name = name.replace(/^「|」$/g, '').trim();
+      }
+    }
+
+    // 5. Avatar image
+    if (ownerEl) {
+      const imgEl = ownerEl.querySelector('#avatar img, img');
+      if (imgEl && imgEl.src) {
+        avatarUrl = imgEl.src;
+      }
+    }
+    if (!avatarUrl) {
+      const headAvatar = document.querySelector('#owner img, ytd-video-owner-renderer img');
+      if (headAvatar && headAvatar.src) {
+        avatarUrl = headAvatar.src;
+      }
+    }
+
+    if (!id && !handle) return null;
+    return { id: id || handle, name: name || handle || id, handle, avatarUrl };
   }
 
   // ---------------------------------------------------------------------------

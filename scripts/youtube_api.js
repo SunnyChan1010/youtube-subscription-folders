@@ -196,7 +196,23 @@ const YTSubscriptionService = (() => {
       return clean;
     }
 
-    const path = clean.startsWith('@') ? clean : (clean.startsWith('http') ? '' : `@${clean}`);
+    const details = await resolveChannelDetails(clean);
+    return details ? details.id : clean;
+  }
+
+  /**
+   * Resolves channel handle or URL to full channel details (canonical ID, display name, avatar)
+   */
+  async function resolveChannelDetails(handleOrId) {
+    if (!handleOrId) return null;
+    const clean = String(handleOrId).trim();
+
+    let canonicalId = /^UC[a-zA-Z0-9_-]{22}$/.test(clean) ? clean : '';
+    let handle = clean.startsWith('@') ? clean : '';
+    let name = '';
+    let avatarUrl = '';
+
+    const path = clean.startsWith('@') ? clean : (clean.startsWith('http') ? '' : (canonicalId ? `channel/${canonicalId}` : `@${clean}`));
     const url = clean.startsWith('http') ? clean : `https://www.youtube.com/${path}`;
 
     try {
@@ -204,35 +220,50 @@ const YTSubscriptionService = (() => {
         credentials: 'include',
         headers: { 'Accept': 'text/html' }
       });
-      if (!resp.ok) return clean;
+      if (resp.ok) {
+        const html = await resp.text();
 
-      const html = await resp.text();
+        if (!canonicalId) {
+          const metaMatch = html.match(/<meta\s+itemprop="channelId"\s+content="([^"]+)"/i) ||
+                            html.match(/<meta\s+name="channelId"\s+content="([^"]+)"/i);
+          if (metaMatch && metaMatch[1] && metaMatch[1].startsWith('UC')) {
+            canonicalId = metaMatch[1];
+          } else {
+            const jsonMatch = html.match(/"channelId":"(UC[a-zA-Z0-9_-]{22})"/);
+            if (jsonMatch && jsonMatch[1]) canonicalId = jsonMatch[1];
+          }
+        }
 
-      const metaMatch = html.match(/<meta\s+itemprop="channelId"\s+content="([^"]+)"/i) ||
-                        html.match(/<meta\s+name="channelId"\s+content="([^"]+)"/i);
-      if (metaMatch && metaMatch[1] && metaMatch[1].startsWith('UC')) {
-        return metaMatch[1];
-      }
+        // Title / Name
+        const titleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i) ||
+                           html.match(/<meta\s+name="title"\s+content="([^"]+)"/i);
+        if (titleMatch && titleMatch[1]) {
+          name = titleMatch[1].replace(' - YouTube', '').trim();
+        }
 
-      const jsonMatch = html.match(/"channelId":"(UC[a-zA-Z0-9_-]{22})"/);
-      if (jsonMatch && jsonMatch[1]) {
-        return jsonMatch[1];
-      }
+        // Avatar
+        const imgMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i) ||
+                         html.match(/<link\s+rel="image_src"\s+href="([^"]+)"/i);
+        if (imgMatch && imgMatch[1]) {
+          avatarUrl = imgMatch[1];
+        }
 
-      const extMatch = html.match(/"externalId":"(UC[a-zA-Z0-9_-]{22})"/);
-      if (extMatch && extMatch[1]) {
-        return extMatch[1];
-      }
-
-      const canMatch = html.match(/<link\s+rel="canonical"\s+href="https:\/\/www\.youtube\.com\/channel\/(UC[a-zA-Z0-9_-]{22})"/i);
-      if (canMatch && canMatch[1]) {
-        return canMatch[1];
+        // Handle
+        const canonicalMatch = html.match(/<link\s+rel="canonical"\s+href="https:\/\/www\.youtube\.com\/(@[^\/\?"]+)"/i);
+        if (canonicalMatch && canonicalMatch[1]) {
+          handle = canonicalMatch[1];
+        }
       }
     } catch (err) {
-      console.warn('[YTSubscriptionService] Error resolving channel ID for:', clean, err);
+      console.warn('[YTSubscriptionService] Error resolving channel details for:', clean, err);
     }
 
-    return clean;
+    return {
+      id: canonicalId || clean,
+      name: name || handle || canonicalId || clean,
+      handle: handle || (clean.startsWith('@') ? clean : ''),
+      avatarUrl: avatarUrl || ''
+    };
   }
 
   /**
@@ -1189,6 +1220,7 @@ const YTSubscriptionService = (() => {
     getSapisidCookie,
     getAuthSession,
     resolveChannelId,
+    resolveChannelDetails,
     acquireExecutionTab,
     releaseExecutionTab,
     executeSubscribeDirect,

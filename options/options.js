@@ -80,6 +80,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       .replace(/'/g, '&#39;');
   }
 
+  function showToast(msg) {
+    let toast = document.getElementById('opt-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'opt-toast';
+      toast.className = 'yt-org-toast';
+      toast.style.cssText = 'position: fixed; bottom: 24px; right: 24px; background: #222; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; z-index: 10000; box-shadow: 0 4px 16px rgba(0,0,0,0.4); opacity: 0; transition: opacity 0.3s; pointer-events: none; border-left: 4px solid #2196f3;';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.style.opacity = '1';
+    setTimeout(() => { toast.style.opacity = '0'; }, 2500);
+  }
+
   function parseYouTubeChannelInput(input) {
     if (!input) return null;
     const trimmed = String(input).trim();
@@ -280,6 +294,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           const targetFolderId = e.target.value;
           if (targetFolderId) {
             await YTFolderStorage.addChannelToFolder(targetFolderId, ch);
+            const targetFolder = allFolders.find(f => f.id === targetFolderId);
+            showToast(`已將「${ch.name || ch.handle || ch.id}」指派至「${targetFolder?.name || '分組'}」`);
             await loadData();
           }
         };
@@ -354,6 +370,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       card.querySelector('.btn-remove-channel').onclick = async () => {
         await YTFolderStorage.removeChannelFromFolder(folder.id, ch.id);
+        showToast(`已自「${folder.name}」移除「${ch.name || ch.handle || ch.id}」`);
         await loadData();
       };
 
@@ -442,18 +459,46 @@ document.addEventListener('DOMContentLoaded', async () => {
       (normH && c.handle && c.handle.replace(/^@/, '').toLowerCase() === normH)
     );
 
-    if (existingCh) {
+    let channelName = existingCh?.name || handle || id;
+    let avatarUrl = existingCh?.avatarUrl || '';
+
+    // If channel is not yet in our dictionary, resolve canonical metadata
+    if (!existingCh) {
+      inputAddChannelHandle.disabled = true;
+      btnAddChannelSubmit.disabled = true;
+      btnAddChannelSubmit.textContent = '解析中...';
+      try {
+        if (typeof YTSubscriptionService !== 'undefined' && YTSubscriptionService.resolveChannelDetails) {
+          const details = await YTSubscriptionService.resolveChannelDetails(inputVal);
+          if (details) {
+            if (details.id) id = details.id;
+            if (details.name) channelName = details.name;
+            if (details.handle) handle = details.handle;
+            if (details.avatarUrl) avatarUrl = details.avatarUrl;
+          }
+        }
+      } catch (err) {
+        console.warn('[Options] Error resolving channel details:', err);
+      } finally {
+        inputAddChannelHandle.disabled = false;
+        btnAddChannelSubmit.disabled = false;
+        btnAddChannelSubmit.textContent = '加入頻道';
+      }
+    } else {
       id = existingCh.id || id;
       handle = existingCh.handle || handle;
     }
 
+    const folder = allFolders.find(f => f.id === activeFolderId);
     await YTFolderStorage.addChannelToFolder(activeFolderId, {
       id,
       handle: handle ? (handle.startsWith('@') ? handle : `@${handle}`) : '',
-      name: existingCh?.name || handle || id
+      name: channelName,
+      avatarUrl
     });
 
     inputAddChannelHandle.value = '';
+    showToast(`已將「${channelName}」加入「${folder?.name || '分組'}」！`);
     await loadData();
   }
 
