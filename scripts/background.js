@@ -72,6 +72,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const res = await YTSubscriptionService.unsubscribeChannel(message.channelId);
+        if (res && res.success) {
+          await YTFolderStorage.removeChannelFromAllFolders(message.channelId);
+        }
         sendResponse(res);
       } catch (err) {
         sendResponse({ success: false, error: err.message });

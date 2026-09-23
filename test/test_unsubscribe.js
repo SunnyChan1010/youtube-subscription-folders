@@ -64,6 +64,7 @@ if (!global.crypto) {
 const YT_INITIAL_DATA = require('../scripts/initial_data.js');
 global.YT_INITIAL_DATA = YT_INITIAL_DATA;
 const YTFolderStorage = require('../scripts/storage.js');
+global.YTFolderStorage = YTFolderStorage;
 const YTSubscriptionService = require('../scripts/youtube_api.js');
 
 async function runTests() {
@@ -185,6 +186,58 @@ async function runTests() {
   assert.ok(progressEvents.length >= 2, 'onProgress should be called for each channel');
   console.log(`  Progress events received: ${progressEvents.length}`);
   console.log('  ✅ batchUnsubscribeWithProgress completed successfully');
+
+  // Test 4: YTFolderStorage.removeChannelFromAllFolders multi-folder & handle synchronization
+  console.log('\n[Test 4] YTFolderStorage.removeChannelFromAllFolders:');
+  const testFolders = [
+    { id: 'f_tech', name: 'Tech', channels: ['UC111', '@channelone'] },
+    { id: 'f_news', name: 'News', channels: ['UC111', 'UC222'] },
+    { id: 'f_music', name: 'Music', channels: ['UC222'] }
+  ];
+  const testChannels = {
+    'UC111': { id: 'UC111', name: 'Channel One', handle: '@channelone', isSubscribed: true },
+    'UC222': { id: 'UC222', name: 'Channel Two', handle: '@channeltwo', isSubscribed: true }
+  };
+  await YTFolderStorage.setFolders(testFolders);
+  await YTFolderStorage.setChannels(testChannels);
+
+  const remResult = await YTFolderStorage.removeChannelFromAllFolders('UC111', '@channelone');
+  assert.strictEqual(remResult.success, true, 'removeChannelFromAllFolders should succeed');
+  assert.strictEqual(remResult.removedCount, 3, 'Should remove 2 refs from f_tech and 1 from f_news (total 3)');
+
+  const updatedFolders = await YTFolderStorage.getFolders();
+  const fTech = updatedFolders.find(f => f.id === 'f_tech');
+  const fNews = updatedFolders.find(f => f.id === 'f_news');
+  const fMusic = updatedFolders.find(f => f.id === 'f_music');
+
+  assert.deepStrictEqual(fTech.channels, [], 'Tech folder should be empty after removing UC111/@channelone');
+  assert.deepStrictEqual(fNews.channels, ['UC222'], 'News folder should retain only UC222');
+  assert.deepStrictEqual(fMusic.channels, ['UC222'], 'Music folder should remain untouched');
+
+  const updatedChannels = await YTFolderStorage.getChannels();
+  assert.strictEqual(updatedChannels['UC111'].isSubscribed, false, 'Channel One isSubscribed should be false');
+  console.log('  ✅ removeChannelFromAllFolders successfully removed channel across all folders and updated subscription status');
+
+  // Test 5: Automatic folder decategorization upon API unsubscription
+  console.log('\n[Test 5] Automatic folder decategorization upon unsubscribeChannel:');
+  fTech.channels = ['UC444'];
+  fMusic.channels = ['UC222', 'UC444'];
+  updatedChannels['UC444'] = { id: 'UC444', name: 'Channel Four', handle: '@channelfour', isSubscribed: true };
+  await YTFolderStorage.setFolders([fTech, fNews, fMusic]);
+  await YTFolderStorage.setChannels(updatedChannels);
+
+  // Unsubscribe UC444 via YTSubscriptionService
+  const autoUnsubRes = await YTSubscriptionService.unsubscribeChannel('UC444');
+  assert.strictEqual(autoUnsubRes.success, true, 'unsubscribeChannel should succeed');
+
+  const postUnsubFolders = await YTFolderStorage.getFolders();
+  const postTech = postUnsubFolders.find(f => f.id === 'f_tech');
+  const postMusic = postUnsubFolders.find(f => f.id === 'f_music');
+
+  assert.ok(!postTech.channels.includes('UC444'), 'Tech folder should no longer contain UC444');
+  assert.ok(!postMusic.channels.includes('UC444'), 'Music folder should no longer contain UC444');
+  assert.deepStrictEqual(postMusic.channels, ['UC222'], 'Music folder should still contain UC222');
+  console.log('  ✅ unsubscribeChannel automatically triggered synchronous folder decategorization');
 
   console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY! 🎉');
 }

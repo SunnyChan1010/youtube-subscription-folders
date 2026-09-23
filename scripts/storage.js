@@ -498,6 +498,118 @@ const YTFolderStorage = (() => {
     return true;
   }
 
+  /**
+   * Synchronously removes a channel from all folders and marks it as unsubscribed.
+   * Matches across folder lists by canonical ID, @handle, aliases, and channel registry.
+   */
+  async function removeChannelFromAllFolders(channelId, channelHandle = '') {
+    if (!channelId && !channelHandle) return { success: false, removedCount: 0, affectedFolderIds: [] };
+
+    const folders = await getFolders();
+    const channels = await getChannels();
+
+    const normTargetHandle = normalizeHandle(channelHandle || channelId);
+    const targetLower = (channelId || '').toLowerCase();
+    const handleLower = (channelHandle || '').toLowerCase();
+
+    // Identify all matching aliases/keys representing this channel
+    const matchingIds = new Set();
+    if (targetLower) matchingIds.add(targetLower);
+    if (handleLower) {
+      matchingIds.add(handleLower);
+      if (!handleLower.startsWith('@')) matchingIds.add('@' + handleLower);
+    }
+    if (normTargetHandle) {
+      matchingIds.add(normTargetHandle);
+      matchingIds.add('@' + normTargetHandle);
+    }
+
+    // Expand matches using channels dictionary
+    for (const [key, ch] of Object.entries(channels)) {
+      if (!ch) continue;
+      const kLower = key.toLowerCase();
+      const kNorm = normalizeHandle(key);
+      const chIdLower = (ch.id || '').toLowerCase();
+      const chHandleNorm = normalizeHandle(ch.handle || '');
+      const chHandleLower = (ch.handle || '').toLowerCase();
+
+      const isMatch = (
+        matchingIds.has(kLower) ||
+        (kNorm && matchingIds.has(kNorm)) ||
+        (chIdLower && matchingIds.has(chIdLower)) ||
+        (chHandleNorm && matchingIds.has(chHandleNorm)) ||
+        (chHandleLower && matchingIds.has(chHandleLower))
+      );
+
+      if (isMatch) {
+        matchingIds.add(kLower);
+        if (ch.id) matchingIds.add(ch.id.toLowerCase());
+        if (ch.handle) {
+          matchingIds.add(ch.handle.toLowerCase());
+          const hNorm = normalizeHandle(ch.handle);
+          if (hNorm) {
+            matchingIds.add(hNorm);
+            matchingIds.add('@' + hNorm);
+          }
+        }
+        ch.isSubscribed = false;
+      }
+    }
+
+    // Direct key check
+    if (targetLower && channels[targetLower]) {
+      channels[targetLower].isSubscribed = false;
+    }
+
+    let totalRemoved = 0;
+    const affectedFolderIds = [];
+
+    // Filter each folder's channel list
+    for (const folder of folders) {
+      if (!Array.isArray(folder.channels) || folder.channels.length === 0) continue;
+
+      const prevLen = folder.channels.length;
+      folder.channels = folder.channels.filter(id => {
+        if (!id) return false;
+        const idLower = String(id).toLowerCase();
+        const idNorm = normalizeHandle(id);
+
+        if (matchingIds.has(idLower)) return false;
+        if (idNorm && matchingIds.has(idNorm)) return false;
+
+        const ch = channels[id];
+        if (ch) {
+          if (ch.id && matchingIds.has(ch.id.toLowerCase())) return false;
+          if (ch.handle) {
+            if (matchingIds.has(ch.handle.toLowerCase())) return false;
+            const hNorm = normalizeHandle(ch.handle);
+            if (hNorm && matchingIds.has(hNorm)) return false;
+          }
+        }
+
+        return true;
+      });
+
+      const removedInFolder = prevLen - folder.channels.length;
+      if (removedInFolder > 0) {
+        totalRemoved += removedInFolder;
+        affectedFolderIds.push(folder.id);
+      }
+    }
+
+    await setRaw({
+      [STORAGE_KEYS.FOLDERS]: folders,
+      [STORAGE_KEYS.CHANNELS]: channels
+    });
+    notifyChange();
+
+    return {
+      success: true,
+      removedCount: totalRemoved,
+      affectedFolderIds
+    };
+  }
+
   async function toggleChannelInFolder(folderId, channelInfo) {
     const folders = await getFolders();
     const channels = await getChannels();
@@ -664,7 +776,17 @@ const YTFolderStorage = (() => {
 
   async function setChannelSubscribed(channelId, isSubscribed = true) {
     const channels = await getChannels();
-    const ch = channels[channelId];
+    let ch = channels[channelId];
+    if (!ch && channelId) {
+      const targetLower = channelId.toLowerCase();
+      const normH = normalizeHandle(channelId);
+      const chKey = Object.keys(channels).find(k =>
+        k.toLowerCase() === targetLower ||
+        (channels[k].handle && normalizeHandle(channels[k].handle) === normH) ||
+        (channels[k].id && channels[k].id.toLowerCase() === targetLower)
+      );
+      if (chKey) ch = channels[chKey];
+    }
     if (ch) {
       ch.isSubscribed = isSubscribed;
       await setChannels(channels);
@@ -839,6 +961,7 @@ const YTFolderStorage = (() => {
     deleteFolder,
     addChannelToFolder,
     removeChannelFromFolder,
+    removeChannelFromAllFolders,
     toggleChannelInFolder,
     getFoldersByChannel,
     getUncategorizedChannels,

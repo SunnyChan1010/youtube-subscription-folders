@@ -19,6 +19,15 @@ const YTSubscriptionService = (() => {
            window.location.hostname.includes('youtube.com');
   }
 
+  function getStorageInstance() {
+    if (typeof YTFolderStorage !== 'undefined') return YTFolderStorage;
+    if (typeof globalThis !== 'undefined' && globalThis.YTFolderStorage) return globalThis.YTFolderStorage;
+    if (typeof require !== 'undefined') {
+      try { return require('./storage.js'); } catch (e) {}
+    }
+    return null;
+  }
+
   /**
    * Generates SAPISIDHASH authorization header value for YouTube InnerTube API.
    * Format: SAPISIDHASH <timestamp>_<sha1(timestamp + " " + sapisid + " " + origin)>
@@ -650,6 +659,12 @@ const YTSubscriptionService = (() => {
             cachedSubscribedChannels.channelsList = cachedSubscribedChannels.channelsList.filter(c => c.id !== canonicalId);
           }
         }
+        const storage = getStorageInstance();
+        if (storage && storage.removeChannelFromAllFolders) {
+          try {
+            await storage.removeChannelFromAllFolders(canonicalId);
+          } catch (e) {}
+        }
         return { success: true, channelId: canonicalId, data: json };
       } else {
         return { success: false, error: verified.error, channelId: canonicalId, details: verified.details };
@@ -961,6 +976,12 @@ const YTSubscriptionService = (() => {
         if (response && response.success) {
           if (cachedSubscribedChannels && cachedSubscribedChannels.channelIds) {
             cachedSubscribedChannels.channelIds.delete(canonicalId);
+          }
+          const storage = getStorageInstance();
+          if (storage && storage.removeChannelFromAllFolders) {
+            try {
+              await storage.removeChannelFromAllFolders(canonicalId, channelIdOrHandle);
+            } catch (e) {}
           }
         }
 

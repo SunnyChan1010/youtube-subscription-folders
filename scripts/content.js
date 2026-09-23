@@ -839,6 +839,176 @@
   }
 
   // ---------------------------------------------------------------------------
+  // 6. Automatic Unsubscribe Synchronization
+  // When a user unsubscribes anywhere on YouTube (Channel page, Watch page,
+  // /feed/channels, or native confirm dialog), synchronously remove the channel
+  // from all folders, update the tagger button, and refresh sidebar/filters.
+  // ---------------------------------------------------------------------------
+  let lastSubscribeActionContext = null;
+  let currentWatchedChannelState = { key: '', wasSubscribed: false };
+
+  // Track clicks on subscribe/unsubscribe action buttons and popup menus
+  document.addEventListener('click', (e) => {
+    const subTarget = e.target.closest(
+      'yt-subscribe-button-view-model, subscribe-button-view-model, #subscribe-button, ytd-subscribe-button-renderer, ytd-menu-service-item-renderer, tp-yt-paper-item, button[aria-label*="訂閱"], button[aria-label*="subscribe" i]'
+    );
+    if (!subTarget) return;
+
+    // Check if clicked inside a channel list item (/feed/channels or search)
+    const channelRow = e.target.closest('ytd-channel-renderer, ytd-grid-channel-renderer');
+    if (channelRow) {
+      const link = channelRow.querySelector('a#main-link, a[href*="/@"], a[href*="/channel/"]');
+      const href = link?.getAttribute('href') || '';
+      let id = '';
+      let handle = '';
+      const hm = href.match(/\/@([^\/\?]+)/);
+      if (hm) handle = `@${hm[1]}`;
+      const im = href.match(/\/channel\/([^\/\?]+)/);
+      if (im) id = im[1];
+      const name = channelRow.querySelector('#channel-title, #title')?.textContent?.trim() || handle || id;
+      if (id || handle) {
+        lastSubscribeActionContext = { id: id || handle, handle, name, timestamp: Date.now() };
+        return;
+      }
+    }
+
+    if (window.location.pathname.startsWith('/@') || window.location.pathname.startsWith('/channel/')) {
+      lastSubscribeActionContext = { ...extractCurrentChannelInfo(), timestamp: Date.now() };
+    } else if (window.location.pathname.startsWith('/watch')) {
+      lastSubscribeActionContext = { ...extractWatchPageChannelInfo(), timestamp: Date.now() };
+    }
+  }, true);
+
+  // Listen for YouTube's native Unsubscribe Confirmation Dialog button click
+  document.addEventListener('click', async (e) => {
+    const confirmBtn = e.target.closest(
+      '#confirm-button, yt-confirm-dialog-renderer #confirm-button, ytd-confirm-dialog-renderer #confirm-button, [dialog-confirm]'
+    );
+    if (!confirmBtn) return;
+
+    const dialog = confirmBtn.closest('yt-confirm-dialog-renderer, ytd-confirm-dialog-renderer, tp-yt-paper-dialog, ytd-popup-container');
+    if (!dialog) return;
+
+    const dialogText = dialog.textContent || '';
+    const isUnsubDialog = /取消訂閱|unsubscribe/i.test(dialogText);
+    if (!isUnsubDialog) return;
+
+    let targetChannel = null;
+
+    // 1. Context from recent subscribe button click (within 60 seconds)
+    if (lastSubscribeActionContext && (Date.now() - lastSubscribeActionContext.timestamp < 60000)) {
+      targetChannel = lastSubscribeActionContext;
+    }
+
+    // 2. Parse from dialog text: e.g. 要取消訂閱「頻道名稱」嗎？ or Unsubscribe from ChannelName?
+    let parsedName = '';
+    const zhMatch = dialogText.match(/要取消訂閱「([^」]+)」/);
+    if (zhMatch) parsedName = zhMatch[1].trim();
+    if (!parsedName) {
+      const enMatch = dialogText.match(/Unsubscribe from ([^\?]+)\?/i);
+      if (enMatch) parsedName = enMatch[1].trim();
+    }
+
+    if (!targetChannel) {
+      if (window.location.pathname.startsWith('/@') || window.location.pathname.startsWith('/channel/')) {
+        targetChannel = extractCurrentChannelInfo();
+      } else if (window.location.pathname.startsWith('/watch')) {
+        targetChannel = extractWatchPageChannelInfo();
+      }
+    }
+
+    // Cross-reference parsedName with cached channels
+    if (parsedName && cachedChannels) {
+      const matched = Object.values(cachedChannels).find(c =>
+        c.name && c.name.trim().toLowerCase() === parsedName.toLowerCase()
+      );
+      if (matched) {
+        targetChannel = {
+          id: matched.id || matched.handle,
+          handle: matched.handle,
+          name: matched.name
+        };
+      } else if (targetChannel && !targetChannel.name) {
+        targetChannel.name = parsedName;
+      }
+    }
+
+    if (!targetChannel || (!targetChannel.id && !targetChannel.handle)) return;
+
+    const chId = targetChannel.id || targetChannel.handle;
+    const chHandle = targetChannel.handle || '';
+    const chName = targetChannel.name || chHandle || chId;
+
+    const removeRes = await YTFolderStorage.removeChannelFromAllFolders(chId, chHandle);
+    await loadData();
+    injectSidebarSection();
+
+    const taggerBtn = document.getElementById('yt-org-tagger-toggle-btn');
+    if (taggerBtn) {
+      updateTaggerButtonAppearance(taggerBtn, targetChannel);
+    }
+
+    if (removeRes && removeRes.removedCount > 0) {
+      showToast(`已取消訂閱「${chName}」，並已同步自 ${removeRes.removedCount} 個分組移除。`);
+    } else {
+      showToast(`已取消訂閱「${chName}」，已同步確認自所有分組移除。`);
+    }
+  }, true);
+
+  // Monitor subscribe button state transitions on channel / watch pages
+  function monitorChannelSubscribeButtonState() {
+    const pathname = window.location.pathname;
+    const isChannelPage = pathname.startsWith('/@') || pathname.startsWith('/channel/');
+    const isWatchPage = pathname.startsWith('/watch');
+    if (!isChannelPage && !isWatchPage) return;
+
+    const channelInfo = isChannelPage ? extractCurrentChannelInfo() : extractWatchPageChannelInfo();
+    if (!channelInfo || (!channelInfo.id && !channelInfo.handle)) return;
+
+    const currentKey = channelInfo.id || channelInfo.handle;
+    const subBtn = document.querySelector(
+      'yt-subscribe-button-view-model button, subscribe-button-view-model button, #owner #subscribe-button button, ytd-subscribe-button-renderer button, #subscribe-button button'
+    );
+    if (!subBtn) return;
+
+    const btnText = (subBtn.textContent || '').trim();
+    const btnAria = (subBtn.getAttribute('aria-label') || '').trim();
+    const combined = `${btnText} ${btnAria}`.toLowerCase();
+
+    const isSubscribedNow = (
+      combined.includes('已訂閱') ||
+      combined.includes('subscribed') ||
+      subBtn.closest('[subscribed]') !== null
+    );
+
+    const isUnsubscribedNow = !isSubscribedNow && (
+      combined.includes('訂閱') ||
+      combined.includes('subscribe')
+    );
+
+    if (currentWatchedChannelState.key === currentKey) {
+      if (currentWatchedChannelState.wasSubscribed && isUnsubscribedNow) {
+        currentWatchedChannelState.wasSubscribed = false;
+        (async () => {
+          const res = await YTFolderStorage.removeChannelFromAllFolders(channelInfo.id, channelInfo.handle);
+          await loadData();
+          injectSidebarSection();
+          const taggerBtn = document.getElementById('yt-org-tagger-toggle-btn');
+          if (taggerBtn) {
+            updateTaggerButtonAppearance(taggerBtn, channelInfo);
+          }
+          if (res && res.removedCount > 0) {
+            showToast(`已取消訂閱「${channelInfo.name || currentKey}」，並已同步自 ${res.removedCount} 個分組移除。`);
+          }
+        })();
+      }
+    } else {
+      currentWatchedChannelState.key = currentKey;
+      currentWatchedChannelState.wasSubscribed = isSubscribedNow;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Master Lifecycle Handler
   // ---------------------------------------------------------------------------
   async function onPageUpdate() {
@@ -850,6 +1020,7 @@
     checkAndInjectFeedFilter();
     checkAndInjectChannelTagger();
     checkAndInjectChannelsSyncBanner();
+    monitorChannelSubscribeButtonState();
   }
 
   window.addEventListener('yt-navigate-finish', onPageUpdate);
@@ -968,6 +1139,7 @@
     const isChannelOrWatch = pathname.startsWith('/@') || pathname.startsWith('/channel/') || pathname.startsWith('/watch');
     if (isChannelOrWatch) {
       checkAndInjectChannelTagger();
+      monitorChannelSubscribeButtonState();
     }
     if (pathname.startsWith('/feed/channels') && !document.getElementById('yt-org-sync-banner')) {
       checkAndInjectChannelsSyncBanner();
