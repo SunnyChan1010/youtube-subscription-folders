@@ -745,7 +745,12 @@
       avatarUrl = avatarEl.src || '';
     }
 
-    return { id: id || handle, name: name || handle, handle, avatarUrl };
+    if (!id && !handle) return null;
+    const finalName = name || handle || id;
+    if (typeof isSystemActionTitle === 'function' && (isSystemActionTitle(finalName) || isSystemActionTitle(handle) || isSystemActionTitle(id))) {
+      return null;
+    }
+    return { id: id || handle, name: finalName, handle, avatarUrl };
   }
 
   function extractWatchPageChannelInfo() {
@@ -819,7 +824,11 @@
     }
 
     if (!id && !handle) return null;
-    return { id: id || handle, name: name || handle || id, handle, avatarUrl };
+    const finalWatchName = name || handle || id;
+    if (typeof isSystemActionTitle === 'function' && (isSystemActionTitle(finalWatchName) || isSystemActionTitle(handle) || isSystemActionTitle(id))) {
+      return null;
+    }
+    return { id: id || handle, name: finalWatchName, handle, avatarUrl };
   }
 
   // ---------------------------------------------------------------------------
@@ -871,9 +880,13 @@
         const img = node.querySelector('#avatar img, img')?.src || '';
 
         if (id || handle) {
+          const finalNodeName = title || handle || id;
+          if (typeof isSystemActionTitle === 'function' && (isSystemActionTitle(finalNodeName) || isSystemActionTitle(handle) || isSystemActionTitle(id))) {
+            return;
+          }
           discovered.push({
             id: id || handle,
-            name: title || handle,
+            name: finalNodeName,
             handle,
             avatarUrl: img
           });

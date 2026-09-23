@@ -263,7 +263,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       inputAddChannelHandle.style.display = 'none';
       btnAddChannelSubmit.style.display = 'none';
 
-      let displayed = uncategorizedChannels;
+      let displayed = uncategorizedChannels.filter(ch =>
+        typeof isSystemActionTitle !== 'function' || (!isSystemActionTitle(ch.name) && !isSystemActionTitle(ch.handle) && !isSystemActionTitle(ch.id))
+      );
       const query = searchQuery.trim().toLowerCase();
       if (query) {
         displayed = displayed.filter(ch =>
@@ -826,10 +828,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       const normHandle = handle.replace(/^@/, '');
 
       let isSub = false;
-      if (id && (subsData.channelIds.has(id) || subsData.channelIds.has(id.toLowerCase()))) {
-        isSub = true;
-      } else if (normHandle && (subsData.handles.has(normHandle) || subsData.handles.has('@' + normHandle))) {
-        isSub = true;
+      const isInvalidSystemTitle = typeof isSystemActionTitle === 'function' &&
+        (isSystemActionTitle(ch.name) || isSystemActionTitle(handle) || isSystemActionTitle(id));
+
+      if (!isInvalidSystemTitle) {
+        if (id && (subsData.channelIds.has(id) || subsData.channelIds.has(id.toLowerCase()))) {
+          isSub = true;
+        } else if (normHandle && (subsData.handles.has(normHandle) || subsData.handles.has('@' + normHandle))) {
+          isSub = true;
+        }
       }
 
       if (!isSub) {

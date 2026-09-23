@@ -28,6 +28,28 @@ const YTSubscriptionService = (() => {
     return null;
   }
 
+  function checkSystemActionTitle(title) {
+    if (!title) return false;
+    if (typeof isSystemActionTitle === 'function') {
+      return isSystemActionTitle(title);
+    }
+    if (typeof globalThis !== 'undefined' && typeof globalThis.isSystemActionTitle === 'function') {
+      return globalThis.isSystemActionTitle(title);
+    }
+    if (typeof YT_INITIAL_DATA !== 'undefined' && typeof YT_INITIAL_DATA.isSystemActionTitle === 'function') {
+      return YT_INITIAL_DATA.isSystemActionTitle(title);
+    }
+    if (typeof require !== 'undefined') {
+      try {
+        const initData = require('./initial_data.js');
+        if (typeof initData.isSystemActionTitle === 'function') {
+          return initData.isSystemActionTitle(title);
+        }
+      } catch (e) {}
+    }
+    return false;
+  }
+
   /**
    * Generates SAPISIDHASH authorization header value for YouTube InnerTube API.
    * Format: SAPISIDHASH <timestamp>_<sha1(timestamp + " " + sapisid + " " + origin)>
@@ -307,12 +329,6 @@ const YTSubscriptionService = (() => {
       }
     }
 
-    if (foundId) channelSet.add(foundId);
-    if (foundHandle) {
-      handleSet.add(foundHandle);
-      handleSet.add(foundHandle.replace(/^@/, ''));
-    }
-
     let foundName = '';
     if (data.title) {
       if (typeof data.title === 'string') {
@@ -322,6 +338,17 @@ const YTSubscriptionService = (() => {
       } else if (Array.isArray(data.title.runs) && data.title.runs[0]?.text) {
         foundName = data.title.runs.map(r => r.text).join('');
       }
+    }
+
+    // Skip any YouTube system action UI buttons (e.g. "Create post", "Upload video", "Settings")
+    if (checkSystemActionTitle(foundName) || checkSystemActionTitle(foundHandle) || checkSystemActionTitle(foundId)) {
+      return;
+    }
+
+    if (foundId) channelSet.add(foundId);
+    if (foundHandle) {
+      handleSet.add(foundHandle);
+      handleSet.add(foundHandle.replace(/^@/, ''));
     }
 
     let foundAvatar = '';
@@ -348,6 +375,9 @@ const YTSubscriptionService = (() => {
     }
 
     for (const key of Object.keys(data)) {
+      if (key === 'topbar' || key === 'header' || key === 'masthead' || key === 'guide' || key === 'responseContext') {
+        continue;
+      }
       if (typeof data[key] === 'object' && data[key] !== null) {
         extractChannelsFromBrowseData(data[key], channelSet, handleSet, channelMap);
       }

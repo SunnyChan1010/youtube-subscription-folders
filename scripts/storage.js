@@ -25,6 +25,28 @@ const YTFolderStorage = (() => {
     return String(h).trim().toLowerCase().replace(/^@/, '');
   }
 
+  function checkSystemActionTitle(title) {
+    if (!title) return false;
+    if (typeof isSystemActionTitle === 'function') {
+      return isSystemActionTitle(title);
+    }
+    if (typeof globalThis !== 'undefined' && typeof globalThis.isSystemActionTitle === 'function') {
+      return globalThis.isSystemActionTitle(title);
+    }
+    if (typeof YT_INITIAL_DATA !== 'undefined' && typeof YT_INITIAL_DATA.isSystemActionTitle === 'function') {
+      return YT_INITIAL_DATA.isSystemActionTitle(title);
+    }
+    if (typeof require !== 'undefined') {
+      try {
+        const initData = require('./initial_data.js');
+        if (typeof initData.isSystemActionTitle === 'function') {
+          return initData.isSystemActionTitle(title);
+        }
+      } catch (e) {}
+    }
+    return false;
+  }
+
   async function getRaw(keys) {
     return new Promise((resolve) => {
       chrome.storage.local.get(keys, (res) => resolve(res || {}));
@@ -147,6 +169,24 @@ const YTFolderStorage = (() => {
       raw = await getRaw([STORAGE_KEYS.CHANNELS]);
       channels = raw[STORAGE_KEYS.CHANNELS] || {};
     }
+
+    // Auto-sanitize channels against non-channel system action titles (e.g. "Create post", "Settings", etc.)
+    if (channels && typeof channels === 'object') {
+      let hasInvalid = false;
+      for (const [key, ch] of Object.entries(channels)) {
+        if (!ch) continue;
+        const testName = ch.name || '';
+        const testHandle = ch.handle || '';
+        if (checkSystemActionTitle(testName) || checkSystemActionTitle(key) || checkSystemActionTitle(testHandle)) {
+          delete channels[key];
+          hasInvalid = true;
+        }
+      }
+      if (hasInvalid) {
+        await setRaw({ [STORAGE_KEYS.CHANNELS]: channels });
+      }
+    }
+
     return (channels && typeof channels === 'object') ? channels : {};
   }
 
@@ -218,7 +258,9 @@ const YTFolderStorage = (() => {
         item.forEach(addRaw);
       } else if (typeof item === 'object') {
         if (item.id || item.handle || item.name) {
-          rawChannelsList.push(item);
+          if (!checkSystemActionTitle(item.name) && !checkSystemActionTitle(item.handle) && !checkSystemActionTitle(item.id)) {
+            rawChannelsList.push(item);
+          }
         } else {
           Object.values(item).forEach(addRaw);
         }
@@ -308,9 +350,14 @@ const YTFolderStorage = (() => {
       if (!ref) return null;
       if (typeof ref === 'object') {
         const direct = findCanonical(ref);
-        return direct ? direct.id : (ref.id || ref.handle);
+        const resolvedId = direct ? direct.id : (ref.id || ref.handle);
+        if (checkSystemActionTitle(resolvedId) || checkSystemActionTitle(ref.name) || checkSystemActionTitle(ref.handle)) {
+          return null;
+        }
+        return resolvedId;
       }
       const str = String(ref).trim();
+      if (checkSystemActionTitle(str)) return null;
       const lower = str.toLowerCase();
       if (aliasToCanonicalId[lower]) return aliasToCanonicalId[lower];
       const nh = normalizeHandle(str);
@@ -784,6 +831,7 @@ const YTFolderStorage = (() => {
       const lAvatar = liveCh.avatarUrl ? String(liveCh.avatarUrl).trim() : '';
 
       if (!lId && !lHandle) continue;
+      if (checkSystemActionTitle(lName) || checkSystemActionTitle(lHandle) || checkSystemActionTitle(lId)) continue;
 
       // Find matching entry in channels
       let foundKey = null;
@@ -972,7 +1020,9 @@ const YTFolderStorage = (() => {
                          (handleStr && (assignedTokens.has(handleStr) || assignedTokens.has('@' + handleStr)));
 
       if (!isAssigned && ch.isSubscribed !== false) {
-        uncategorized.push(ch);
+        if (!checkSystemActionTitle(ch.name) && !checkSystemActionTitle(ch.handle) && !checkSystemActionTitle(ch.id)) {
+          uncategorized.push(ch);
+        }
       }
     }
     return uncategorized;
@@ -985,6 +1035,9 @@ const YTFolderStorage = (() => {
     for (const ch of channelsArray) {
       const id = ch.id || ch.handle;
       if (!id) continue;
+      if (checkSystemActionTitle(ch.name) || checkSystemActionTitle(ch.handle) || checkSystemActionTitle(id)) {
+        continue;
+      }
 
       const normH = normalizeHandle(ch.handle || id);
       const existingKey = Object.keys(channels).find(k =>
@@ -1037,6 +1090,9 @@ const YTFolderStorage = (() => {
     for (const u of updates) {
       const id = u.id || u.handle;
       if (!id) continue;
+      if (checkSystemActionTitle(u.name) || checkSystemActionTitle(u.handle) || checkSystemActionTitle(id)) {
+        continue;
+      }
       if (channels[id]) {
         Object.assign(channels[id], u);
       } else {

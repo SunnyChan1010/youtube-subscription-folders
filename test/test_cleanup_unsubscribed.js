@@ -124,6 +124,53 @@ async function runCleanupTests() {
   assert.strictEqual(channelsAfterPurge['UC555'], undefined, 'Purged channel UC555 must not exist in channels registry');
   console.log('  ✅ batchRemoveUnsubscribedChannels atomically purged unsubscribed channels from all folders and registry');
 
+  // Test 5: Filter and sanitize YouTube system actions (e.g. "Create post", "Upload video", "Settings", "建立貼文")
+  console.log('\n[Test 5] System action filtering & storage sanitization:');
+  const { isSystemActionTitle } = require('../scripts/initial_data.js');
+  assert.strictEqual(isSystemActionTitle('Create post'), true, 'Create post must be recognized as system action');
+  assert.strictEqual(isSystemActionTitle('建立貼文'), true, '建立貼文 must be recognized as system action');
+  assert.strictEqual(isSystemActionTitle('Upload video'), true, 'Upload video must be recognized as system action');
+  assert.strictEqual(isSystemActionTitle('設定'), true, '設定 must be recognized as system action');
+  assert.strictEqual(isSystemActionTitle('BBC News'), false, 'Normal channel name must not be filtered');
+
+  // Insert polluted channel with "Create post" directly into storage
+  await global.chrome.storage.local.set({
+    'yt_channels': {
+      'UC111': { id: 'UC111', name: 'Alpha Tech', handle: '@alpha', avatarUrl: '', isSubscribed: true },
+      'UC_USER_OWN': { id: 'UC_USER_OWN', name: 'Create post', handle: '', avatarUrl: '', isSubscribed: true }
+    }
+  });
+
+  // Calling getChannels() must auto-sanitize and delete it
+  const sanitizedChannels = await YTFolderStorage.getChannels();
+  assert.strictEqual(sanitizedChannels['UC_USER_OWN'], undefined, 'Polluted "Create post" entry must be automatically purged from channels');
+
+  // Calling getUncategorizedChannels() must never return system actions
+  const uncategorizedAfterSanitize = await YTFolderStorage.getUncategorizedChannels();
+  assert.ok(!uncategorizedAfterSanitize.some(c => c.name === 'Create post' || c.id === 'UC_USER_OWN'), 'System actions must never appear in uncategorized');
+
+  // batchAddChannels should ignore system action titles
+  await YTFolderStorage.batchAddChannels([
+    { id: 'UC_INVALID_1', name: 'Upload video', handle: '' },
+    { id: 'UC_VALID_1', name: 'Real Channel', handle: '@real' }
+  ]);
+  const channelsAfterBatch = await YTFolderStorage.getChannels();
+  assert.strictEqual(channelsAfterBatch['UC_INVALID_1'], undefined, 'batchAddChannels must ignore "Upload video"');
+  assert.ok(channelsAfterBatch['UC_VALID_1'], 'batchAddChannels must accept real channels');
+
+  // deduplicateData should ignore system action titles
+  const dedupRes = YTFolderStorage.deduplicateData({
+    folders: [{ id: 'f_test', name: 'Test', channels: ['Create post', 'UC_VALID_1'] }],
+    channels: {
+      'Create post': { id: 'Create post', name: 'Create post' },
+      'UC_VALID_1': { id: 'UC_VALID_1', name: 'Real Channel' }
+    }
+  });
+  const dedupFolderChannels = dedupRes.cleanFolders[0].channels;
+  assert.ok(!dedupFolderChannels.includes('Create post'), 'deduplicateData must purge "Create post" from folder channels');
+  assert.strictEqual(dedupRes.cleanChannelsMap['Create post'], undefined, 'deduplicateData must not have "Create post" in channel map');
+  console.log('  ✅ YouTube system action buttons (e.g. Create post) completely filtered, sanitized, and purged');
+
   console.log('\n🎉 ALL CLEANUP & AVATAR TESTS PASSED SUCCESSFULLY! 🎉');
 }
 

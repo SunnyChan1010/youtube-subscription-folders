@@ -4,6 +4,16 @@
 
 ---
 
+## [1.0.4] - 2026-09-23
+
+### 🐛 問題修復 (Fixed)
+- **徹底過濾與清理 YouTube 系統 UI 操作按鈕（如 "Create post" / "建立貼文" 等）**：
+  - **根本原因排查**：在透過 YouTube InnerTube API 獲取已訂閱頻道清單（`browseId: 'FEchannels'`）時，YouTube 回傳之 JSON 結構頂層包含導覽列與頂部操作選單（`topbar`）。該選單內含有指向使用者自身頻道社群分頁的「建立貼文」（`Create post` / `建立貼文`）按鈕，過去的遞迴遍歷無差別掃描整個 JSON，導致該按鈕名稱被誤識別為頻道名稱並存入本地儲存，最終出現在「未分類頻道」中。
+  - **API 提取防護**：於 `extractChannelsFromBrowseData` 中全面忽略 `topbar`、`header`、`masthead`、`guide` 及 `responseContext`，並在收集頻道前嚴格校驗標題與 Handle，徹底阻絕非頻道操作按鈕。
+  - **儲存層自動淨化 (Auto-Sanitization)**：在 `getChannels()` 讀取時自動過濾並刪除已污染的系統操作按鈕（包括 `Create post`, `Upload video`, `Settings`, `建立貼文`, `上傳影片`, `設定` 等繁簡日英名稱），同時在 `getUncategorizedChannels()`、`batchAddChannels()`、`deduplicateData()` 與 `options.js` 中實施多層安全過濾，杜絕任何幽靈按鈕卡片。
+
+---
+
 ## [1.0.3] - 2026-09-23
 
 ### 🚀 新增功能 (Added)
