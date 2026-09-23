@@ -14,3 +14,7 @@ docs/audit/
 *.audit.md
 *AUDIT*.md
 PROJECT_METRICS_AUDIT.md
+# Project documentation & AI Agent context (local only, do not sync to GitHub)
+AGENT_CONTEXT.md
+.cursorrules
+*.local.md
