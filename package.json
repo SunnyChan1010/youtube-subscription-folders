@@ -1,6 +1,6 @@
 {
   "name": "youtube-subscription-folders",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "YouTube 訂閱分組管理 (Subscription Folders) Chrome 擴充功能",
   "private": true,
   "scripts": {

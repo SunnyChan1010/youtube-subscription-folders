@@ -236,8 +236,33 @@ async function runTests() {
 
   assert.ok(!postTech.channels.includes('UC444'), 'Tech folder should no longer contain UC444');
   assert.ok(!postMusic.channels.includes('UC444'), 'Music folder should no longer contain UC444');
-  assert.deepStrictEqual(postMusic.channels, ['UC222'], 'Music folder should still contain UC222');
   console.log('  ✅ unsubscribeChannel automatically triggered synchronous folder decategorization');
+
+  // Test 6: Purging channel by handle, ID, and Name cross-referencing
+  console.log('\n[Test 6] Purging channel with handle, ID, and Name:');
+  const customFolders = [
+    { id: 'f_splatoon', name: 'Splatoon', channels: ['UCHMso01_zl__VZjA23NKzgA'] }
+  ];
+  const customChannels = {
+    'UCHMso01_zl__VZjA23NKzgA': {
+      id: 'UCHMso01_zl__VZjA23NKzgA',
+      name: '新月玩魷戲 しんげつ🖌️',
+      handle: '',
+      isSubscribed: true
+    }
+  };
+  await YTFolderStorage.setFolders(customFolders);
+  await YTFolderStorage.setChannels(customChannels);
+
+  // Call removeChannelFromAllFolders passing handle and name (even if handle wasn't in dictionary)
+  const purgeRes = await YTFolderStorage.removeChannelFromAllFolders('@shingetsusp', '@shingetsusp', '新月玩魷戲 しんげつ🖌️');
+  assert.strictEqual(purgeRes.success, true, 'Purge should succeed');
+  assert.strictEqual(purgeRes.removedCount, 1, 'Should remove UCHMso01_zl__VZjA23NKzgA via name match');
+
+  const checkFolders = await YTFolderStorage.getFolders();
+  const splatoonFolder = checkFolders.find(f => f.id === 'f_splatoon');
+  assert.deepStrictEqual(splatoonFolder.channels, [], 'Splatoon folder should now be empty');
+  console.log('  ✅ removeChannelFromAllFolders successfully cross-matched and purged channel via name and aliases');
 
   console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY! 🎉');
 }

@@ -502,8 +502,8 @@ const YTFolderStorage = (() => {
    * Synchronously removes a channel from all folders and marks it as unsubscribed.
    * Matches across folder lists by canonical ID, @handle, aliases, and channel registry.
    */
-  async function removeChannelFromAllFolders(channelId, channelHandle = '') {
-    if (!channelId && !channelHandle) return { success: false, removedCount: 0, affectedFolderIds: [] };
+  async function removeChannelFromAllFolders(channelId, channelHandle = '', channelName = '') {
+    if (!channelId && !channelHandle && !channelName) return { success: false, removedCount: 0, affectedFolderIds: [] };
 
     const folders = await getFolders();
     const channels = await getChannels();
@@ -511,6 +511,7 @@ const YTFolderStorage = (() => {
     const normTargetHandle = normalizeHandle(channelHandle || channelId);
     const targetLower = (channelId || '').toLowerCase();
     const handleLower = (channelHandle || '').toLowerCase();
+    const nameLower = (channelName || '').trim().toLowerCase();
 
     // Identify all matching aliases/keys representing this channel
     const matchingIds = new Set();
@@ -532,13 +533,15 @@ const YTFolderStorage = (() => {
       const chIdLower = (ch.id || '').toLowerCase();
       const chHandleNorm = normalizeHandle(ch.handle || '');
       const chHandleLower = (ch.handle || '').toLowerCase();
+      const chNameLower = (ch.name || '').trim().toLowerCase();
 
       const isMatch = (
         matchingIds.has(kLower) ||
         (kNorm && matchingIds.has(kNorm)) ||
         (chIdLower && matchingIds.has(chIdLower)) ||
         (chHandleNorm && matchingIds.has(chHandleNorm)) ||
-        (chHandleLower && matchingIds.has(chHandleLower))
+        (chHandleLower && matchingIds.has(chHandleLower)) ||
+        (nameLower && chNameLower && chNameLower === nameLower)
       );
 
       if (isMatch) {
@@ -585,6 +588,7 @@ const YTFolderStorage = (() => {
             const hNorm = normalizeHandle(ch.handle);
             if (hNorm && matchingIds.has(hNorm)) return false;
           }
+          if (nameLower && ch.name && ch.name.trim().toLowerCase() === nameLower) return false;
         }
 
         return true;

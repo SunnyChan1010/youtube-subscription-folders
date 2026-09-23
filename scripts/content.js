@@ -544,9 +544,44 @@
     });
   }
 
+  function getPageSubscriptionState() {
+    const subBtn = document.querySelector(
+      'yt-subscribe-button-view-model button, subscribe-button-view-model button, #owner #subscribe-button button, ytd-subscribe-button-renderer button, #subscribe-button button'
+    );
+    if (!subBtn) return 'UNKNOWN';
+
+    const text = (subBtn.textContent || '').trim();
+    const aria = (subBtn.getAttribute('aria-label') || '').trim();
+    const combined = `${text} ${aria}`.toLowerCase();
+
+    // Check for subscribed
+    if (combined.includes('已訂閱') || combined.includes('subscribed') || subBtn.closest('[subscribed]') !== null) {
+      return 'SUBSCRIBED';
+    }
+
+    // Check for definitely unsubscribed ("訂閱" or "subscribe", but not "已訂閱")
+    if (combined.includes('訂閱') || combined.includes('subscribe')) {
+      return 'UNSUBSCRIBED';
+    }
+
+    return 'UNKNOWN';
+  }
+
   async function updateTaggerButtonAppearance(btn, channelInfo) {
-    const memberFolderIds = await YTFolderStorage.getFoldersByChannel(channelInfo.id, channelInfo.handle);
-    const hasFolders = memberFolderIds.length > 0;
+    if (!btn || !channelInfo) return;
+
+    const subState = getPageSubscriptionState();
+    let memberFolderIds = await YTFolderStorage.getFoldersByChannel(channelInfo.id, channelInfo.handle);
+
+    // If channel is definitely unsubscribed on YouTube, it MUST NOT be in any folder!
+    if (subState === 'UNSUBSCRIBED' && memberFolderIds.length > 0) {
+      await YTFolderStorage.removeChannelFromAllFolders(channelInfo.id, channelInfo.handle, channelInfo.name);
+      await loadData();
+      injectSidebarSection();
+      memberFolderIds = [];
+    }
+
+    const hasFolders = memberFolderIds.length > 0 && subState !== 'UNSUBSCRIBED';
     btn.className = `yt-org-channel-tagger-btn ${hasFolders ? 'has-folders' : ''}`;
     btn.innerHTML = `
       <span>📁</span>
@@ -555,8 +590,6 @@
     `;
   }
 
-  // ---------------------------------------------------------------------------
-  // 4. Channel Page & Video Watch Page Quick Tagger Button
   // ---------------------------------------------------------------------------
   // 4. Channel Page & Video Watch Page Quick Tagger Button
   // ---------------------------------------------------------------------------
@@ -625,6 +658,11 @@
       const existingRect = existing.getBoundingClientRect();
       const isRenderedAndVisible = existing.dataset.channelKey === channelKey && (existingRect.width > 0 && existingRect.height > 0);
       if (isRenderedAndVisible) {
+        // Continuously update button appearance with current live subscription state
+        const existingBtn = existing.querySelector('#yt-org-tagger-toggle-btn');
+        if (existingBtn) {
+          updateTaggerButtonAppearance(existingBtn, channelInfo);
+        }
         return;
       }
       // Stale or stuck in hidden skeleton -> remove and recreate cleanly
@@ -675,6 +713,12 @@
     }
 
     if (!id) {
+      const canonicalLink = document.querySelector('link[rel="canonical"]');
+      const m = canonicalLink?.getAttribute('href')?.match(/channel\/(UC[a-zA-Z0-9_-]{22})/);
+      if (m) id = m[1];
+    }
+
+    if (!id) {
       const idMatch = window.location.pathname.match(/^\/channel\/([^\/\?]+)/);
       if (idMatch) id = idMatch[1];
     }
@@ -720,14 +764,10 @@
     }
 
     // 2. Canonical author link in <head>
-    if (!handle && !id) {
-      const headAuthorLink = document.querySelector('link[itemprop="url"][href*="/@"], link[itemprop="url"][href*="/channel/"]');
+    if (!id) {
+      const headAuthorLink = document.querySelector('link[itemprop="url"][href*="/channel/"], link[rel="canonical"][href*="/channel/"]');
       if (headAuthorLink) {
         const href = headAuthorLink.getAttribute('href') || '';
-        const handleMatch = href.match(/\/@([^\/\?]+)/);
-        if (handleMatch) {
-          handle = `@${handleMatch[1]}`;
-        }
         const idMatch = href.match(/\/channel\/([^\/\?]+)/);
         if (idMatch) {
           id = idMatch[1];
@@ -879,28 +919,30 @@
     }
   }, true);
 
-  // Listen for YouTube's native Unsubscribe Confirmation Dialog button click
+  // Listen for YouTube's native Unsubscribe Confirmation Dialog button click & Menu items
   document.addEventListener('click', async (e) => {
-    const confirmBtn = e.target.closest(
-      '#confirm-button, yt-confirm-dialog-renderer #confirm-button, ytd-confirm-dialog-renderer #confirm-button, [dialog-confirm]'
-    );
-    if (!confirmBtn) return;
+    // 1. Confirm dialog button
+    const isDialogConfirm = e.target.closest('#confirm-button, [dialog-confirm]') ||
+      (e.target.closest('yt-confirm-dialog-renderer, ytd-confirm-dialog-renderer, tp-yt-paper-dialog, ytd-popup-container') &&
+       /取消訂閱|unsubscribe/i.test(e.target.textContent || '') &&
+       !/取消$|cancel/i.test(e.target.textContent || ''));
 
-    const dialog = confirmBtn.closest('yt-confirm-dialog-renderer, ytd-confirm-dialog-renderer, tp-yt-paper-dialog, ytd-popup-container');
-    if (!dialog) return;
+    // 2. Dropdown menu item or button explicitly labeled "取消訂閱"
+    const isUnsubMenuItem = e.target.closest('ytd-menu-service-item-renderer, tp-yt-paper-item') &&
+      /取消訂閱|unsubscribe/i.test(e.target.textContent || '');
 
-    const dialogText = dialog.textContent || '';
-    const isUnsubDialog = /取消訂閱|unsubscribe/i.test(dialogText);
-    if (!isUnsubDialog) return;
+    if (!isDialogConfirm && !isUnsubMenuItem) return;
 
     let targetChannel = null;
 
-    // 1. Context from recent subscribe button click (within 60 seconds)
+    // Context from recent subscribe button click (within 60 seconds)
     if (lastSubscribeActionContext && (Date.now() - lastSubscribeActionContext.timestamp < 60000)) {
       targetChannel = lastSubscribeActionContext;
     }
 
-    // 2. Parse from dialog text: e.g. 要取消訂閱「頻道名稱」嗎？ or Unsubscribe from ChannelName?
+    // Parse from dialog text: e.g. 要取消訂閱「頻道名稱」嗎？ or Unsubscribe from ChannelName?
+    const dialog = e.target.closest('yt-confirm-dialog-renderer, ytd-confirm-dialog-renderer, tp-yt-paper-dialog, ytd-popup-container');
+    const dialogText = dialog?.textContent || '';
     let parsedName = '';
     const zhMatch = dialogText.match(/要取消訂閱「([^」]+)」/);
     if (zhMatch) parsedName = zhMatch[1].trim();
@@ -939,13 +981,14 @@
     const chHandle = targetChannel.handle || '';
     const chName = targetChannel.name || chHandle || chId;
 
-    const removeRes = await YTFolderStorage.removeChannelFromAllFolders(chId, chHandle);
+    const removeRes = await YTFolderStorage.removeChannelFromAllFolders(chId, chHandle, chName);
     await loadData();
     injectSidebarSection();
 
     const taggerBtn = document.getElementById('yt-org-tagger-toggle-btn');
     if (taggerBtn) {
-      updateTaggerButtonAppearance(taggerBtn, targetChannel);
+      taggerBtn.className = 'yt-org-channel-tagger-btn';
+      taggerBtn.innerHTML = `<span>📁</span><span>加入分組</span><span style="font-size: 10px; margin-left: 2px;">▼</span>`;
     }
 
     if (removeRes && removeRes.removedCount > 0) {
@@ -956,7 +999,7 @@
   }, true);
 
   // Monitor subscribe button state transitions on channel / watch pages
-  function monitorChannelSubscribeButtonState() {
+  async function monitorChannelSubscribeButtonState() {
     const pathname = window.location.pathname;
     const isChannelPage = pathname.startsWith('/@') || pathname.startsWith('/channel/');
     const isWatchPage = pathname.startsWith('/watch');
@@ -965,46 +1008,27 @@
     const channelInfo = isChannelPage ? extractCurrentChannelInfo() : extractWatchPageChannelInfo();
     if (!channelInfo || (!channelInfo.id && !channelInfo.handle)) return;
 
-    const currentKey = channelInfo.id || channelInfo.handle;
-    const subBtn = document.querySelector(
-      'yt-subscribe-button-view-model button, subscribe-button-view-model button, #owner #subscribe-button button, ytd-subscribe-button-renderer button, #subscribe-button button'
-    );
-    if (!subBtn) return;
+    const subState = getPageSubscriptionState();
+    const taggerBtn = document.getElementById('yt-org-tagger-toggle-btn');
 
-    const btnText = (subBtn.textContent || '').trim();
-    const btnAria = (subBtn.getAttribute('aria-label') || '').trim();
-    const combined = `${btnText} ${btnAria}`.toLowerCase();
-
-    const isSubscribedNow = (
-      combined.includes('已訂閱') ||
-      combined.includes('subscribed') ||
-      subBtn.closest('[subscribed]') !== null
-    );
-
-    const isUnsubscribedNow = !isSubscribedNow && (
-      combined.includes('訂閱') ||
-      combined.includes('subscribe')
-    );
-
-    if (currentWatchedChannelState.key === currentKey) {
-      if (currentWatchedChannelState.wasSubscribed && isUnsubscribedNow) {
-        currentWatchedChannelState.wasSubscribed = false;
-        (async () => {
-          const res = await YTFolderStorage.removeChannelFromAllFolders(channelInfo.id, channelInfo.handle);
-          await loadData();
-          injectSidebarSection();
-          const taggerBtn = document.getElementById('yt-org-tagger-toggle-btn');
-          if (taggerBtn) {
-            updateTaggerButtonAppearance(taggerBtn, channelInfo);
-          }
-          if (res && res.removedCount > 0) {
-            showToast(`已取消訂閱「${channelInfo.name || currentKey}」，並已同步自 ${res.removedCount} 個分組移除。`);
-          }
-        })();
+    if (subState === 'UNSUBSCRIBED') {
+      const memberFolderIds = await YTFolderStorage.getFoldersByChannel(channelInfo.id, channelInfo.handle);
+      if (memberFolderIds.length > 0 || (taggerBtn && taggerBtn.classList.contains('has-folders'))) {
+        const res = await YTFolderStorage.removeChannelFromAllFolders(channelInfo.id, channelInfo.handle, channelInfo.name);
+        await loadData();
+        injectSidebarSection();
+        if (taggerBtn) {
+          taggerBtn.className = 'yt-org-channel-tagger-btn';
+          taggerBtn.innerHTML = `<span>📁</span><span>加入分組</span><span style="font-size: 10px; margin-left: 2px;">▼</span>`;
+        }
+        if (res && res.removedCount > 0) {
+          showToast(`已取消訂閱「${channelInfo.name || channelInfo.handle}」，並已同步自 ${res.removedCount} 個分組移除。`);
+        }
       }
-    } else {
-      currentWatchedChannelState.key = currentKey;
-      currentWatchedChannelState.wasSubscribed = isSubscribedNow;
+    } else if (subState === 'SUBSCRIBED') {
+      if (taggerBtn) {
+        updateTaggerButtonAppearance(taggerBtn, channelInfo);
+      }
     }
   }
 
