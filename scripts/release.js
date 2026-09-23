@@ -162,6 +162,16 @@ async function main() {
     console.log(`📌 使用當前版本操作: v${newVersion}`);
   }
 
+  // 執行發布前置代碼審查與架構守護驗證 (CODE_RULES.md)
+  console.log('\n🛡️ 執行發布前置代碼審查與架構守護驗證 (CODE_RULES.md)...');
+  try {
+    const { execSync } = require('child_process');
+    execSync('node scripts/audit_code_rules.js', { cwd: rootDir, stdio: 'inherit' });
+  } catch (err) {
+    console.error('\n❌ 發布前置代碼審查未通過！請依據 CODE_RULES.md 修復所有違規項後再執行發布。\n');
+    process.exit(1);
+  }
+
   const tagName = `v${newVersion}`;
 
   // 讀取 GitHub Token

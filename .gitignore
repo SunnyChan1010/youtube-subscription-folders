@@ -18,4 +18,7 @@ PROJECT_METRICS_AUDIT.md
 docs/
 AGENT_CONTEXT.md
 .cursorrules
+.agentrules
+CODE_RULES.md
+*.rules.md
 *.local.md
