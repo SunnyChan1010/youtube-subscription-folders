@@ -35,4 +35,11 @@ const YT_INITIAL_DATA = {
   "channels": [],
   "uncategorizedChannels": []
 };
-if (typeof module !== 'undefined') { module.exports = YT_INITIAL_DATA; }
+/** Default Channel Avatar SVG (Clean dark theme YouTube user silhouette) **/
+const YT_DEFAULT_AVATAR = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9IiMyODI4MjgiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjgiIHI9IjMuNiIgZmlsbD0iI2FhYWFhYSIvPjxwYXRoIGQ9Ik0xMiAxMy41Yy0zIDAtNi41IDEuNS02LjUgMy41djEuNWgxM3YtMS41YzAtMi0zLjUtMy41LTYuNS0zLjV6IiBmaWxsPSIjYWFhYWFhIi8+PC9zdmc+";
+
+if (typeof module !== 'undefined') {
+  module.exports = YT_INITIAL_DATA;
+  module.exports.YT_INITIAL_DATA = YT_INITIAL_DATA;
+  module.exports.YT_DEFAULT_AVATAR = YT_DEFAULT_AVATAR;
+}

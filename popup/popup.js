@@ -3,11 +3,13 @@
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
+  const DEFAULT_AVATAR = (typeof YT_DEFAULT_AVATAR !== 'undefined' ? YT_DEFAULT_AVATAR : "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9IiMyODI4MjgiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjgiIHI9IjMuNiIgZmlsbD0iI2FhYWFhYSIvPjxwYXRoIGQ9Ik0xMiAxMy41Yy0zIDAtNi41IDEuNS02LjUgMy41djEuNWgxM3YtMS41YzAtMi0zLjUtMy41LTYuNS0zLjV6IiBmaWxsPSIjYWFhYWFhIi8+PC9zdmc+");
+
   // Safe image error fallback (replaces inline onerror CSP violation)
   document.addEventListener('error', (e) => {
-    if (e.target && e.target.tagName === 'IMG' && e.target.dataset.defaultSrc) {
-      if (e.target.src !== e.target.dataset.defaultSrc) {
-        e.target.src = e.target.dataset.defaultSrc;
+    if (e.target && e.target.tagName === 'IMG') {
+      if (e.target.src !== DEFAULT_AVATAR) {
+        e.target.src = DEFAULT_AVATAR;
       }
     }
   }, true);
@@ -174,7 +176,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           foldersHtml = `<span class="search-folder-tag unassigned">尚未加入任何分組</span>`;
         }
 
-        const defaultAvatar = 'https://www.gstatic.com/youtube/img/creator/avatar/default_avatar_72.png';
+        const defaultAvatar = DEFAULT_AVATAR;
         item.innerHTML = `
           <div class="search-result-top">
             <img class="search-result-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />

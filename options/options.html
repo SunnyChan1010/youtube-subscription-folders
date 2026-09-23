@@ -17,6 +17,10 @@
       </div>
     </div>
     <div class="header-actions">
+      <button class="btn btn-secondary" id="btn-check-unsubscribed" title="檢查所有分組中已在 YouTube 取消訂閱的頻道並清理">
+        <span>🔍</span>
+        <span>檢查退訂頻道</span>
+      </button>
       <button class="btn btn-secondary" id="btn-clean-duplicates" title="檢查並清理重複頻道，以已分類優先保留">
         <span>🧹</span>
         <span>清理重複</span>
@@ -205,6 +209,38 @@
 
       <div style="display: flex; justify-content: center; gap: 12px;">
         <button class="btn btn-secondary" id="progress-modal-btn-cancel">中斷訂閱</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Check & Clean Unsubscribed Channels Modal -->
+  <div class="modal-overlay" id="cleanup-unsubscribed-modal">
+    <div class="modal-content" style="width: 580px; max-height: 85vh; display: flex; flex-direction: column;">
+      <div class="modal-title" style="color: #ff4d4f; display: flex; align-items: center; gap: 8px;">
+        <span>🧹 清理已退訂頻道</span>
+      </div>
+      <div style="font-size: 13.5px; color: var(--text-primary); line-height: 1.5;">
+        比對 YouTube 最新訂閱狀態後，發現以下頻道在您目前的 YouTube 帳號中<strong>已經取消訂閱</strong>，但仍留在擴充功能的分組中。<br />
+        請勾選您希望<strong>自所有分組中徹底清除</strong>的頻道：
+      </div>
+
+      <div class="unsub-toolbar">
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button type="button" class="btn btn-secondary btn-xs" id="cleanup-btn-select-all">全選</button>
+          <button type="button" class="btn btn-secondary btn-xs" id="cleanup-btn-deselect-all">取消全選</button>
+        </div>
+        <div id="cleanup-selected-counter" style="font-size: 12.5px; color: var(--text-secondary);">
+          已選擇 0 個頻道
+        </div>
+      </div>
+
+      <div class="unsub-channels-list" id="cleanup-channels-list">
+        <!-- Dynamically injected channel items -->
+      </div>
+
+      <div class="modal-actions" style="margin-top: 12px; justify-content: space-between;">
+        <button class="btn btn-secondary" id="cleanup-modal-btn-cancel">取消（保留）</button>
+        <button class="btn btn-primary" id="cleanup-modal-btn-confirm" style="background: #e53935; border-color: #d32f2f;">確認自所有分組清除 (0)</button>
       </div>
     </div>
   </div>

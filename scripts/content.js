@@ -20,6 +20,16 @@
   let currentDropdownChannelInfo = null;
   let currentDropdownTriggerBtn = null;
 
+  const DEFAULT_AVATAR = (typeof YT_DEFAULT_AVATAR !== 'undefined' ? YT_DEFAULT_AVATAR : "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9IiMyODI4MjgiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjgiIHI9IjMuNiIgZmlsbD0iI2FhYWFhYSIvPjxwYXRoIGQ9Ik0xMiAxMy41Yy0zIDAtNi41IDEuNS02LjUgMy41djEuNWgxM3YtMS41YzAtMi0zLjUtMy41LTYuNS0zLjV6IiBmaWxsPSIjYWFhYWFhIi8+PC9zdmc+");
+
+  document.addEventListener('error', (e) => {
+    if (e.target && e.target.tagName === 'IMG' && e.target.classList.contains('yt-org-channel-avatar')) {
+      if (e.target.src !== DEFAULT_AVATAR) {
+        e.target.src = DEFAULT_AVATAR;
+      }
+    }
+  }, true);
+
   function escapeHtml(str) {
     if (!str) return '';
     return String(str)
@@ -116,7 +126,7 @@
         folder.channels.forEach(chId => {
           const ch = cachedChannels[chId] || { id: chId, name: chId, handle: '', avatarUrl: '' };
           const link = ch.handle ? `/${ch.handle}` : (ch.id ? `/channel/${ch.id}` : '#');
-          const defaultAvatar = 'https://www.gstatic.com/youtube/img/creator/avatar/default_avatar_72.png';
+          const defaultAvatar = DEFAULT_AVATAR;
           const safeChTitle = escapeHtml(ch.name || ch.handle || '頻道');
           const safeChTooltip = escapeHtml(ch.name || ch.handle || '');
           html += `

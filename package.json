@@ -1,10 +1,10 @@
 {
   "name": "youtube-subscription-folders",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "YouTube 訂閱分組管理 (Subscription Folders) Chrome 擴充功能",
   "private": true,
   "scripts": {
-    "test": "node test/test_unsubscribe.js && node test/test_audit_fixes.js",
+    "test": "node test/test_unsubscribe.js && node test/test_audit_fixes.js && node test/test_cleanup_unsubscribed.js",
     "release": "node scripts/release.js"
   },
   "repository": {

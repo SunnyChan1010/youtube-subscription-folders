@@ -502,7 +502,7 @@ const YTFolderStorage = (() => {
    * Synchronously removes a channel from all folders and marks it as unsubscribed.
    * Matches across folder lists by canonical ID, @handle, aliases, and channel registry.
    */
-  async function removeChannelFromAllFolders(channelId, channelHandle = '', channelName = '') {
+  async function removeChannelFromAllFolders(channelId, channelHandle = '', channelName = '', { purgeFromStorage = false } = {}) {
     if (!channelId && !channelHandle && !channelName) return { success: false, removedCount: 0, affectedFolderIds: [] };
 
     const folders = await getFolders();
@@ -526,6 +526,7 @@ const YTFolderStorage = (() => {
     }
 
     // Expand matches using channels dictionary
+    const keysToDelete = new Set();
     for (const [key, ch] of Object.entries(channels)) {
       if (!ch) continue;
       const kLower = key.toLowerCase();
@@ -555,13 +556,26 @@ const YTFolderStorage = (() => {
             matchingIds.add('@' + hNorm);
           }
         }
-        ch.isSubscribed = false;
+        if (purgeFromStorage) {
+          keysToDelete.add(key);
+        } else {
+          ch.isSubscribed = false;
+        }
       }
     }
 
-    // Direct key check
-    if (targetLower && channels[targetLower]) {
-      channels[targetLower].isSubscribed = false;
+    if (purgeFromStorage) {
+      for (const k of keysToDelete) {
+        delete channels[k];
+      }
+      if (targetLower && channels[targetLower]) {
+        delete channels[targetLower];
+      }
+    } else {
+      // Direct key check
+      if (targetLower && channels[targetLower]) {
+        channels[targetLower].isSubscribed = false;
+      }
     }
 
     let totalRemoved = 0;
@@ -612,6 +626,225 @@ const YTFolderStorage = (() => {
       removedCount: totalRemoved,
       affectedFolderIds
     };
+  }
+
+  /**
+   * Atomically removes a batch of unsubscribed channels across all folders and purges them from channels registry.
+   */
+  async function batchRemoveUnsubscribedChannels(channelsList = [], { purgeFromStorage = true } = {}) {
+    if (!Array.isArray(channelsList) || channelsList.length === 0) {
+      return { success: true, removedChannelsCount: 0, totalFolderEntriesRemoved: 0, affectedFolderIds: [] };
+    }
+
+    const folders = await getFolders();
+    const channels = await getChannels();
+
+    // 1. Build a comprehensive set of tokens/IDs/handles to remove
+    const matchingIds = new Set();
+    const namesToPurge = new Set();
+
+    for (const item of channelsList) {
+      if (!item) continue;
+      const id = typeof item === 'string' ? item : (item.id || '');
+      const handle = typeof item === 'object' ? (item.handle || '') : '';
+      const name = typeof item === 'object' ? (item.name || '') : '';
+
+      const targetLower = (id || '').toLowerCase().trim();
+      const handleLower = (handle || '').toLowerCase().trim();
+      const normHandle = normalizeHandle(handle || id);
+      const nameLower = (name || '').toLowerCase().trim();
+
+      if (targetLower) matchingIds.add(targetLower);
+      if (handleLower) {
+        matchingIds.add(handleLower);
+        if (!handleLower.startsWith('@')) matchingIds.add('@' + handleLower);
+      }
+      if (normHandle) {
+        matchingIds.add(normHandle);
+        matchingIds.add('@' + normHandle);
+      }
+      if (nameLower && nameLower !== targetLower) {
+        namesToPurge.add(nameLower);
+      }
+    }
+
+    // 2. Expand matches using channels dictionary
+    const keysToDelete = new Set();
+    for (const [key, ch] of Object.entries(channels)) {
+      if (!ch) continue;
+      const kLower = key.toLowerCase();
+      const kNorm = normalizeHandle(key);
+      const chIdLower = (ch.id || '').toLowerCase();
+      const chHandleNorm = normalizeHandle(ch.handle || '');
+      const chHandleLower = (ch.handle || '').toLowerCase();
+      const chNameLower = (ch.name || '').trim().toLowerCase();
+
+      const isMatch = (
+        matchingIds.has(kLower) ||
+        (kNorm && matchingIds.has(kNorm)) ||
+        (chIdLower && matchingIds.has(chIdLower)) ||
+        (chHandleNorm && matchingIds.has(chHandleNorm)) ||
+        (chHandleLower && matchingIds.has(chHandleLower)) ||
+        (chNameLower && namesToPurge.has(chNameLower))
+      );
+
+      if (isMatch) {
+        matchingIds.add(kLower);
+        if (ch.id) matchingIds.add(ch.id.toLowerCase());
+        if (ch.handle) {
+          matchingIds.add(ch.handle.toLowerCase());
+          const hNorm = normalizeHandle(ch.handle);
+          if (hNorm) {
+            matchingIds.add(hNorm);
+            matchingIds.add('@' + hNorm);
+          }
+        }
+        if (purgeFromStorage) {
+          keysToDelete.add(key);
+        } else {
+          ch.isSubscribed = false;
+        }
+      }
+    }
+
+    if (purgeFromStorage) {
+      for (const k of keysToDelete) {
+        delete channels[k];
+      }
+    }
+
+    // 3. Filter all folders
+    let totalFolderEntriesRemoved = 0;
+    const affectedFolderIds = [];
+
+    for (const folder of folders) {
+      if (!Array.isArray(folder.channels) || folder.channels.length === 0) continue;
+
+      const prevLen = folder.channels.length;
+      folder.channels = folder.channels.filter(id => {
+        if (!id) return false;
+        const idLower = String(id).toLowerCase();
+        const idNorm = normalizeHandle(id);
+
+        if (matchingIds.has(idLower)) return false;
+        if (idNorm && matchingIds.has(idNorm)) return false;
+
+        const ch = channels[id];
+        if (ch) {
+          if (ch.id && matchingIds.has(ch.id.toLowerCase())) return false;
+          if (ch.handle) {
+            if (matchingIds.has(ch.handle.toLowerCase())) return false;
+            const hNorm = normalizeHandle(ch.handle);
+            if (hNorm && matchingIds.has(hNorm)) return false;
+          }
+          if (ch.name && namesToPurge.has(ch.name.trim().toLowerCase())) return false;
+        }
+
+        return true;
+      });
+
+      const removedInFolder = prevLen - folder.channels.length;
+      if (removedInFolder > 0) {
+        totalFolderEntriesRemoved += removedInFolder;
+        affectedFolderIds.push(folder.id);
+      }
+    }
+
+    await setRaw({
+      [STORAGE_KEYS.FOLDERS]: folders,
+      [STORAGE_KEYS.CHANNELS]: channels
+    });
+    notifyChange();
+
+    return {
+      success: true,
+      removedChannelsCount: channelsList.length,
+      totalFolderEntriesRemoved,
+      affectedFolderIds
+    };
+  }
+
+  /**
+   * Enriches stored channels metadata (avatarUrl, name, handle) from live YouTube subscription data.
+   */
+  async function enrichChannelsMetadata(liveChannelsList = []) {
+    if (!Array.isArray(liveChannelsList) || liveChannelsList.length === 0) {
+      return { updatedCount: 0 };
+    }
+
+    const channels = await getChannels();
+    let updatedCount = 0;
+
+    for (const liveCh of liveChannelsList) {
+      if (!liveCh) continue;
+      const lId = liveCh.id ? String(liveCh.id).trim() : '';
+      const lHandle = liveCh.handle ? String(liveCh.handle).trim() : '';
+      const lNormHandle = normalizeHandle(lHandle);
+      const lName = liveCh.name ? String(liveCh.name).trim() : '';
+      const lAvatar = liveCh.avatarUrl ? String(liveCh.avatarUrl).trim() : '';
+
+      if (!lId && !lHandle) continue;
+
+      // Find matching entry in channels
+      let foundKey = null;
+      for (const [key, ch] of Object.entries(channels)) {
+        if (!ch) continue;
+        const kLower = key.toLowerCase();
+        const chIdLower = (ch.id || '').toLowerCase();
+        const chHandleNorm = normalizeHandle(ch.handle || '');
+
+        if ((lId && (kLower === lId.toLowerCase() || chIdLower === lId.toLowerCase())) ||
+            (lNormHandle && (normalizeHandle(key) === lNormHandle || chHandleNorm === lNormHandle))) {
+          foundKey = key;
+          break;
+        }
+      }
+
+      if (foundKey) {
+        const target = channels[foundKey];
+        let changed = false;
+
+        if (lAvatar && (!target.avatarUrl || target.avatarUrl.includes('default_avatar'))) {
+          target.avatarUrl = lAvatar;
+          changed = true;
+        }
+        if (lName && (!target.name || target.name === target.id || target.name.startsWith('UC') || target.name === target.handle)) {
+          target.name = lName;
+          changed = true;
+        }
+        if (lHandle && !target.handle) {
+          target.handle = lHandle.startsWith('@') ? lHandle : `@${lHandle}`;
+          changed = true;
+        }
+        if (lId && !target.id) {
+          target.id = lId;
+          changed = true;
+        }
+        if (target.isSubscribed !== true) {
+          target.isSubscribed = true;
+          changed = true;
+        }
+
+        if (changed) updatedCount++;
+      } else if (lId) {
+        // Channel exists in live YouTube subs but not in local channels dictionary; add it
+        channels[lId] = {
+          id: lId,
+          name: lName || lHandle || lId,
+          handle: lHandle ? (lHandle.startsWith('@') ? lHandle : `@${lHandle}`) : '',
+          avatarUrl: lAvatar || '',
+          isSubscribed: true
+        };
+        updatedCount++;
+      }
+    }
+
+    if (updatedCount > 0) {
+      await setChannels(channels);
+      notifyChange();
+    }
+
+    return { updatedCount };
   }
 
   async function toggleChannelInFolder(folderId, channelInfo) {
@@ -738,7 +971,7 @@ const YTFolderStorage = (() => {
       const isAssigned = (idStr && assignedTokens.has(idStr)) ||
                          (handleStr && (assignedTokens.has(handleStr) || assignedTokens.has('@' + handleStr)));
 
-      if (!isAssigned) {
+      if (!isAssigned && ch.isSubscribed !== false) {
         uncategorized.push(ch);
       }
     }
@@ -966,6 +1199,8 @@ const YTFolderStorage = (() => {
     addChannelToFolder,
     removeChannelFromFolder,
     removeChannelFromAllFolders,
+    batchRemoveUnsubscribedChannels,
+    enrichChannelsMetadata,
     toggleChannelInFolder,
     getFoldersByChannel,
     getUncategorizedChannels,

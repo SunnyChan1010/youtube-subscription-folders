@@ -3,11 +3,13 @@
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
+  const DEFAULT_AVATAR = (typeof YT_DEFAULT_AVATAR !== 'undefined' ? YT_DEFAULT_AVATAR : "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9IiMyODI4MjgiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjgiIHI9IjMuNiIgZmlsbD0iI2FhYWFhYSIvPjxwYXRoIGQ9Ik0xMiAxMy41Yy0zIDAtNi41IDEuNS02LjUgMy41djEuNWgxM3YtMS41YzAtMi0zLjUtMy41LTYuNS0zLjV6IiBmaWxsPSIjYWFhYWFhIi8+PC9zdmc+");
+
   // Safe image error fallback (replaces inline onerror CSP violation)
   document.addEventListener('error', (e) => {
-    if (e.target && e.target.tagName === 'IMG' && e.target.dataset.defaultSrc) {
-      if (e.target.src !== e.target.dataset.defaultSrc) {
-        e.target.src = e.target.dataset.defaultSrc;
+    if (e.target && e.target.tagName === 'IMG') {
+      if (e.target.src !== DEFAULT_AVATAR) {
+        e.target.src = DEFAULT_AVATAR;
       }
     }
   }, true);
@@ -36,6 +38,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnExportBackup = document.getElementById('btn-export-backup');
   const btnImportBackup = document.getElementById('btn-import-backup');
   const btnCleanDuplicates = document.getElementById('btn-clean-duplicates');
+  const btnCheckUnsubscribed = document.getElementById('btn-check-unsubscribed');
 
   // Modals
   const folderModal = document.getElementById('folder-modal');
@@ -61,7 +64,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const progressModalBtnCancel = document.getElementById('progress-modal-btn-cancel');
   let isSubscribeAborted = false;
 
-  // Unsubscribe Confirmation Modal
+  // Unsubscribe Confirmation Modal (Import)
   const unsubscribeConfirmModal = document.getElementById('unsubscribe-confirm-modal');
   const unsubBtnSelectAll = document.getElementById('unsub-btn-select-all');
   const unsubBtnDeselectAll = document.getElementById('unsub-btn-deselect-all');
@@ -69,6 +72,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const unsubChannelsListEl = document.getElementById('unsub-channels-list');
   const unsubModalBtnSkip = document.getElementById('unsub-modal-btn-skip');
   const unsubModalBtnConfirm = document.getElementById('unsub-modal-btn-confirm');
+
+  // Check & Clean Unsubscribed Channels Modal
+  const cleanupUnsubscribedModal = document.getElementById('cleanup-unsubscribed-modal');
+  const cleanupBtnSelectAll = document.getElementById('cleanup-btn-select-all');
+  const cleanupBtnDeselectAll = document.getElementById('cleanup-btn-deselect-all');
+  const cleanupSelectedCounter = document.getElementById('cleanup-selected-counter');
+  const cleanupChannelsListEl = document.getElementById('cleanup-channels-list');
+  const cleanupModalBtnCancel = document.getElementById('cleanup-modal-btn-cancel');
+  const cleanupModalBtnConfirm = document.getElementById('cleanup-modal-btn-confirm');
 
   function escapeHtml(str) {
     if (!str) return '';
@@ -271,7 +283,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       displayed.forEach(ch => {
         const card = document.createElement('div');
         card.className = 'channel-card';
-        const defaultAvatar = 'https://www.gstatic.com/youtube/img/creator/avatar/default_avatar_72.png';
+        const defaultAvatar = DEFAULT_AVATAR;
         const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
 
         const folderOptions = allFolders.map(f => `<option value="${f.id}">${f.icon || '📁'} ${escapeHtml(f.name)}</option>`).join('');
@@ -354,7 +366,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     displayedChannels.forEach(ch => {
       const card = document.createElement('div');
       card.className = 'channel-card';
-      const defaultAvatar = 'https://www.gstatic.com/youtube/img/creator/avatar/default_avatar_72.png';
+      const defaultAvatar = DEFAULT_AVATAR;
       const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
 
       card.innerHTML = `
@@ -537,6 +549,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     URL.revokeObjectURL(url);
   };
 
+  if (btnCleanDuplicates) {
+    btnCleanDuplicates.onclick = async () => {
+      const res = await YTFolderStorage.cleanDuplicates();
+      await loadData();
+      if (res.removedCount > 0) {
+        showToast(`🧹 清理完成！共移除了 ${res.removedCount} 個重複頻道。`);
+      } else {
+        showToast('✨ 檢查完成，目前所有分組與未分類頻道均無重複項！');
+      }
+    };
+  }
+
+  if (btnCheckUnsubscribed) {
+    btnCheckUnsubscribed.onclick = handleCheckUnsubscribedChannels;
+  }
+
   btnImportBackup.onclick = () => {
     importFileInput.value = '';
     importTextarea.value = '';
@@ -589,6 +617,236 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   /**
+   * Prompts user with a modal to select which unsubscribed channels to clean from all folders
+   */
+  function promptCleanupUnsubscribed(unsubscribedChannels) {
+    return new Promise((resolve) => {
+      if (!cleanupUnsubscribedModal || !cleanupChannelsListEl) {
+        resolve([]);
+        return;
+      }
+
+      cleanupChannelsListEl.innerHTML = '';
+      const selectedMap = new Map();
+      unsubscribedChannels.forEach((ch, idx) => {
+        const key = ch.id || ch.handle || `ch_${idx}`;
+        selectedMap.set(key, true);
+      });
+
+      function updateUI() {
+        let count = 0;
+        for (const val of selectedMap.values()) {
+          if (val) count++;
+        }
+        if (cleanupSelectedCounter) {
+          cleanupSelectedCounter.textContent = `已選擇 ${count} / ${unsubscribedChannels.length} 個頻道`;
+        }
+        if (cleanupModalBtnConfirm) {
+          cleanupModalBtnConfirm.textContent = `確認自所有分組清除 (${count})`;
+          cleanupModalBtnConfirm.disabled = count === 0;
+          cleanupModalBtnConfirm.style.opacity = count === 0 ? '0.5' : '1';
+        }
+      }
+
+      unsubscribedChannels.forEach((ch, idx) => {
+        const row = document.createElement('div');
+        row.className = 'unsub-channel-item';
+        const chKey = ch.id || ch.handle || `ch_${idx}`;
+        const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : (ch.id ? `https://www.youtube.com/channel/${ch.id}` : '#');
+        const foldersBadges = (ch.inFolders || []).map(fName =>
+          `<span style="display: inline-block; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.08); color: var(--text-secondary); margin-right: 4px;">${escapeHtml(fName)}</span>`
+        ).join('');
+
+        row.innerHTML = `
+          <input type="checkbox" class="unsub-channel-checkbox" id="cleanup-chk-${idx}" checked />
+          <img class="unsub-channel-avatar" src="${ch.avatarUrl || DEFAULT_AVATAR}" data-default-src="${DEFAULT_AVATAR}" alt="" />
+          <div class="unsub-channel-info">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <a class="unsub-channel-name" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
+            </div>
+            <div class="unsub-channel-handle">${escapeHtml(ch.handle || ch.id)}</div>
+            <div style="margin-top: 4px;">${foldersBadges}</div>
+          </div>
+        `;
+
+        const checkbox = row.querySelector('.unsub-channel-checkbox');
+        checkbox.onchange = () => {
+          selectedMap.set(chKey, checkbox.checked);
+          updateUI();
+        };
+
+        cleanupChannelsListEl.appendChild(row);
+      });
+
+      if (cleanupBtnSelectAll) {
+        cleanupBtnSelectAll.onclick = () => {
+          unsubscribedChannels.forEach((ch, idx) => {
+            selectedMap.set(ch.id || ch.handle || `ch_${idx}`, true);
+            const el = document.getElementById(`cleanup-chk-${idx}`);
+            if (el) el.checked = true;
+          });
+          updateUI();
+        };
+      }
+
+      if (cleanupBtnDeselectAll) {
+        cleanupBtnDeselectAll.onclick = () => {
+          unsubscribedChannels.forEach((ch, idx) => {
+            selectedMap.set(ch.id || ch.handle || `ch_${idx}`, false);
+            const el = document.getElementById(`cleanup-chk-${idx}`);
+            if (el) el.checked = false;
+          });
+          updateUI();
+        };
+      }
+
+      function cleanupAndClose(result) {
+        cleanupUnsubscribedModal.classList.remove('show');
+        if (cleanupModalBtnConfirm) cleanupModalBtnConfirm.onclick = null;
+        if (cleanupModalBtnCancel) cleanupModalBtnCancel.onclick = null;
+        window.removeEventListener('keydown', onKeyDown);
+        resolve(result);
+      }
+
+      function onKeyDown(e) {
+        if (e.key === 'Escape') {
+          cleanupAndClose([]);
+        }
+      }
+      window.addEventListener('keydown', onKeyDown);
+
+      if (cleanupModalBtnConfirm) {
+        cleanupModalBtnConfirm.onclick = () => {
+          const selected = unsubscribedChannels.filter((ch, idx) => selectedMap.get(ch.id || ch.handle || `ch_${idx}`));
+          cleanupAndClose(selected);
+        };
+      }
+
+      if (cleanupModalBtnCancel) {
+        cleanupModalBtnCancel.onclick = () => {
+          cleanupAndClose([]);
+        };
+      }
+
+      updateUI();
+      cleanupUnsubscribedModal.classList.add('show');
+    });
+  }
+
+  /**
+   * Checks all channels in folders & uncategorized against active YouTube subscriptions.
+   * Prompts user with a modal to clean up any channels they have unsubscribed from.
+   */
+  async function handleCheckUnsubscribedChannels() {
+    showToast('🔍 正在連線 YouTube 比對即時訂閱狀態...');
+
+    let subsData;
+    try {
+      subsData = await YTSubscriptionService.fetchSubscribedChannels(true);
+    } catch (err) {
+      console.warn('[Options] Failed to fetch subscribed channels:', err);
+    }
+
+    if (!subsData || !subsData.isLoggedIn) {
+      alert('⚠️ 未能檢測到 YouTube 登入狀態。\n請確認您已在瀏覽器中登入 YouTube，或於新分頁開啟 YouTube 後重試。');
+      return;
+    }
+
+    // 1. Enrich existing channels' avatars and names with live data
+    if (subsData.channelsList && subsData.channelsList.length > 0) {
+      try {
+        const enriched = await YTFolderStorage.enrichChannelsMetadata(subsData.channelsList);
+        if (enriched.updatedCount > 0) {
+          await loadData();
+        }
+      } catch (e) {
+        console.warn('[Options] Auto metadata enrichment error:', e);
+      }
+    }
+
+    // 2. Scan all channels across folders and uncategorized
+    const folders = await YTFolderStorage.getFolders();
+    const channels = await YTFolderStorage.getChannels();
+    const uncategorized = await YTFolderStorage.getUncategorizedChannels();
+
+    const channelMap = new Map(); // id/key -> { ch, folders: [folderName...] }
+
+    folders.forEach(f => {
+      if (Array.isArray(f.channels)) {
+        f.channels.forEach(chRef => {
+          if (!chRef) return;
+          const chObj = channels[chRef] || Object.values(channels).find(c =>
+            (c.id && c.id.toLowerCase() === String(chRef).toLowerCase()) ||
+            (c.handle && normalizeHandle(c.handle) === normalizeHandle(chRef))
+          ) || { id: chRef, name: chRef, handle: '', avatarUrl: '' };
+
+          const key = (chObj.id || chObj.handle || chRef).toLowerCase();
+          if (!channelMap.has(key)) {
+            channelMap.set(key, { ch: chObj, folders: [f.name] });
+          } else {
+            const entry = channelMap.get(key);
+            if (!entry.folders.includes(f.name)) {
+              entry.folders.push(f.name);
+            }
+          }
+        });
+      }
+    });
+
+    uncategorized.forEach(ch => {
+      const key = (ch.id || ch.handle || '').toLowerCase();
+      if (key && !channelMap.has(key)) {
+        channelMap.set(key, { ch, folders: ['未分類'] });
+      }
+    });
+
+    // 3. Find channels in channelMap that are NOT subscribed on YouTube
+    const unsubscribedFound = [];
+    for (const [key, entry] of channelMap.entries()) {
+      const ch = entry.ch;
+      const id = ch.id ? String(ch.id).trim() : '';
+      const handle = ch.handle ? String(ch.handle).trim().toLowerCase() : '';
+      const normHandle = handle.replace(/^@/, '');
+
+      let isSub = false;
+      if (id && (subsData.channelIds.has(id) || subsData.channelIds.has(id.toLowerCase()))) {
+        isSub = true;
+      } else if (normHandle && (subsData.handles.has(normHandle) || subsData.handles.has('@' + normHandle))) {
+        isSub = true;
+      }
+
+      if (!isSub) {
+        unsubscribedFound.push({
+          ...ch,
+          inFolders: entry.folders
+        });
+      }
+    }
+
+    if (unsubscribedFound.length === 0) {
+      showToast('🎉 太棒了！所有分組內的頻道均在 YouTube 正常訂閱中，未發現已退訂的頻道。');
+      return;
+    }
+
+    // 4. Open cleanup modal
+    const toRemove = await promptCleanupUnsubscribed(unsubscribedFound);
+    if (!toRemove || toRemove.length === 0) {
+      showToast('已取消清除，保留所有頻道分組。');
+      return;
+    }
+
+    showToast(`正在自所有分組與儲存庫清除 ${toRemove.length} 個已退訂頻道...`);
+    try {
+      await YTFolderStorage.batchRemoveUnsubscribedChannels(toRemove, { purgeFromStorage: true });
+      await loadData();
+      showToast(`✅ 已成功自所有分組中清除 ${toRemove.length} 個已退訂頻道！`);
+    } catch (err) {
+      console.error('[Options] Failed to batch remove unsubscribed channels:', err);
+      alert('清除頻道時發生錯誤，請重試。');
+    }
+  }
+
+  /**
    * Prompts user with a modal to select which redundant channels to unsubscribe from
    */
   function promptUnsubscribeSelection(redundantChannels) {
@@ -599,7 +857,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       unsubChannelsListEl.innerHTML = '';
-      const defaultAvatar = 'https://www.gstatic.com/youtube/img/creator/avatar/default_avatar_72.png';
+      const defaultAvatar = DEFAULT_AVATAR;
 
       // Default: select all
       const selectedMap = new Map();

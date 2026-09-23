@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube 訂閱分組管理 (Subscription Folders)",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "為 YouTube 訂閱頻道建立自訂分組、側邊欄導覽整合與動態牆即時過濾（無廣告、純本地隱私保護）。",
   "icons": {
     "16": "icons/icon-16.png",

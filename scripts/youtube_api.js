@@ -1030,11 +1030,11 @@ const YTSubscriptionService = (() => {
       }
 
       let isSub = false;
-      if (id && channelIds.has(id)) {
+      if (id && (channelIds.has(id) || channelIds.has(id.toLowerCase()))) {
         isSub = true;
       } else if (handle && (handles.has(handle) || handles.has(`@${normHandle}`))) {
         isSub = true;
-      } else if (ch.isSubscribed === true) {
+      } else if (!isLoggedIn && ch.isSubscribed === true) {
         isSub = true;
       }
 
@@ -1067,6 +1067,7 @@ const YTSubscriptionService = (() => {
       subscribed,
       unsubscribed,
       redundantSubscribed,
+      liveChannelsList: liveChannelsList || [],
       isLoggedIn
     };
   }
