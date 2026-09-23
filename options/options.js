@@ -92,18 +92,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       .replace(/'/g, '&#39;');
   }
 
-  function showToast(msg) {
+  let toastTimer = null;
+  function showToast(msg, duration = 2500) {
     let toast = document.getElementById('opt-toast');
     if (!toast) {
       toast = document.createElement('div');
       toast.id = 'opt-toast';
       toast.className = 'yt-org-toast';
-      toast.style.cssText = 'position: fixed; bottom: 24px; right: 24px; background: #222; color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; z-index: 10000; box-shadow: 0 4px 16px rgba(0,0,0,0.4); opacity: 0; transition: opacity 0.3s; pointer-events: none; border-left: 4px solid #2196f3;';
+      toast.style.cssText = 'position: fixed; bottom: 24px; right: 24px; background: #222; color: #fff; padding: 12px 20px; border-radius: 8px; font-size: 13.5px; z-index: 10000; box-shadow: 0 4px 16px rgba(0,0,0,0.4); opacity: 0; transition: opacity 0.3s; pointer-events: none; border-left: 4px solid #2196f3; display: flex; align-items: center; gap: 8px; max-width: 480px; line-height: 1.4;';
       document.body.appendChild(toast);
     }
     toast.textContent = msg;
     toast.style.opacity = '1';
-    setTimeout(() => { toast.style.opacity = '0'; }, 2500);
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.style.opacity = '0'; }, duration);
   }
 
   function parseYouTubeChannelInput(input) {
@@ -537,16 +539,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Backup Export & Import
   // ---------------------------------------------------------------------------
   btnExportBackup.onclick = async () => {
-    const jsonStr = await YTFolderStorage.exportData();
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `youtube_subscription_folders_backup_${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    try {
+      const folders = await YTFolderStorage.getFolders();
+      const channels = await YTFolderStorage.getChannels();
+      const folderCount = Array.isArray(folders) ? folders.length : 0;
+      const channelCount = channels ? Object.keys(channels).length : 0;
+
+      const jsonStr = await YTFolderStorage.exportData();
+      const dateStr = new Date().toISOString().split('T')[0];
+      const filename = `youtube_subscription_folders_backup_${dateStr}.json`;
+
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      showToast(`💾 備份匯出成功！已下載 ${filename}（包含 ${folderCount} 個分組、${channelCount} 個頻道）`, 3500);
+    } catch (err) {
+      console.error('[Options] Export backup error:', err);
+      showToast('❌ 匯出備份失敗，請稍後重試。', 3000);
+    }
   };
 
   if (btnCleanDuplicates) {
