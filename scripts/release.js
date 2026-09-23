@@ -242,7 +242,22 @@ async function main() {
   } else {
     const errText = await releaseRes.text();
     if (errText.includes('already_exists')) {
-      console.log(`ℹ️ GitHub Release ${tagName} 已經存在。`);
+      console.log(`ℹ️ GitHub Release ${tagName} 已經存在，正在同步更新 Release 說明...`);
+      const getTagRelease = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/tags/${tagName}`, { headers });
+      if (getTagRelease.ok) {
+        const tagData = await getTagRelease.json();
+        const patchRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/${tagData.id}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            name: `v${newVersion} - ${customSummary || '版本更新'}`,
+            body: releaseBody
+          })
+        });
+        if (patchRes.ok) {
+          console.log(`🎉 成功同步更新 GitHub Release 內容！`);
+        }
+      }
     } else {
       console.warn(`⚠️ 建立 GitHub Release 失敗:`, errText);
     }

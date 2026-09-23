@@ -4,6 +4,46 @@
 
 ---
 
+## [1.0.3] - 2026-09-23
+
+### 🚀 新增功能 (Added)
+- **「🔍 檢查退訂頻道」一鍵檢測與批量清理**：
+  - 於管理頁面（Options）頂部操作列新增「**🔍 檢查退訂頻道**」專屬按鈕。
+  - 即時連線 YouTube InnerTube 比對當前真實訂閱狀態，精準篩選出已在 YouTube 取消訂閱但仍留在擴充功能分組中的頻道。
+  - 提供專屬清理確認視窗（`#cleanup-unsubscribed-modal`），顯示頻道頭像、名稱、Handle 及目前所屬分組標籤，支援全選/反選，一鍵自所有分組徹底清除。
+- **頻道頭像與元數據自動補全 (Channel Metadata Enrichment)**：
+  - 比對訂閱清單時，自動將 YouTube 回傳之最新真實高畫質頭像 (`avatarUrl`) 與頻道名稱補全至本地儲存，解決 Takeout 匯入頻道只有 `UC...` 原始 ID 且無頭像之問題。
+
+### 🐛 問題修復 (Fixed)
+- **修復預設頭像 404 破圖問題**：
+  - 原先使用的預設頭像 URL `https://www.gstatic.com/youtube/img/creator/avatar/default_avatar_72.png` 伺服器端已返回 404 Not Found。
+  - 改用現代深色 YouTube 風格人像剪影 SVG（Base64 Data URI），完全**本地端運作、零網路請求、永不失效**。
+  - 加入全域 Capture 階段圖片加載錯誤事件監聽器，確保任何圖片載入異常時自動平滑降級，徹底杜絕破圖圖示。
+- **修復退訂頻道流入「未分類」問題**：
+  - 修正 `YTFolderStorage.getUncategorizedChannels()`，嚴格過濾排除 `isSubscribed === false` 的頻道，防止已退訂頻道意外出現在未分類頻道列表中。
+
+### ⚡ 效能與架構優化 (Changed)
+- **原子化批次寫入 (`batchRemoveUnsubscribedChannels`)**：
+  - 批次移除多個已退訂頻道時改採單次原子寫入，避免多次頻繁觸發 `chrome.storage.local` I/O。
+
+---
+
+## [1.0.2] - 2026-09-23
+
+### 🐛 問題修復 (Fixed)
+- **未訂閱頻道即時狀態偵測與分組強制同步清理**：
+  - 強化即時監聽與攔截 YouTube 退訂行為，確保頻道退訂時立即同步將該頻道自所有分組中移除。
+
+---
+
+## [1.0.1] - 2026-09-23
+
+### 🚀 新增功能 (Added)
+- **取消訂閱頻道時同步取消分組**：
+  - 增加即時監聽使用者在 YouTube 點擊取消訂閱時的事件，自動觸發資料庫分組清理。
+
+---
+
 ## [1.0.0] - 2026-09-22
 
 ### 🚀 新增功能 (Added)
