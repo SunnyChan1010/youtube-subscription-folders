@@ -227,19 +227,21 @@ async function main() {
   console.log(`📦 正在檢查或建立 GitHub Release: ${tagName}...`);
   let releaseBody = `## YouTube 訂閱分組管理 (Subscription Folders) ${tagName}\n\n正式發布版本，支援自訂分組、側邊欄導覽整合、動態牆過濾與一鍵同步。`;
   if (fs.existsSync(changelogPath)) {
-    const changelog = fs.readFileSync(changelogPath, 'utf8');
-    const sectionMatch = changelog.match(new RegExp(`## \\[${newVersion}\\][\\s\\S]*?(?=## |\$)`));
-    if (sectionMatch) {
-      releaseBody = sectionMatch[0].trim();
+    const changelog = fs.readFileSync(changelogPath, 'utf8').replace(/\r\n/g, '\n');
+    const startIdx = changelog.indexOf(`## [${newVersion}]`);
+    if (startIdx !== -1) {
+      const nextHeaderIdx = changelog.indexOf('\n## [', startIdx + 1);
+      releaseBody = changelog.slice(startIdx, nextHeaderIdx !== -1 ? nextHeaderIdx : undefined).replace(/---\s*$/, '').trim();
     }
   }
 
+  let releaseData = null;
   const releaseRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
       tag_name: tagName,
-      name: `Release ${tagName}`,
+      name: `v${newVersion} - ${customSummary || '動態牆自動推進、Shorts/直播過濾與極致效能優化'}`,
       body: releaseBody,
       draft: false,
       prerelease: false
@@ -247,8 +249,8 @@ async function main() {
   });
 
   if (releaseRes.ok) {
-    const relData = await releaseRes.json();
-    console.log(`🎉 成功發布 GitHub Release: ${relData.html_url}`);
+    releaseData = await releaseRes.json();
+    console.log(`🎉 成功發布 GitHub Release: ${releaseData.html_url}`);
   } else {
     const errText = await releaseRes.text();
     if (errText.includes('already_exists')) {
@@ -260,16 +262,58 @@ async function main() {
           method: 'PATCH',
           headers,
           body: JSON.stringify({
-            name: `v${newVersion} - ${customSummary || '版本更新'}`,
+            name: `v${newVersion} - ${customSummary || '動態牆自動推進、Shorts/直播過濾與極致效能優化'}`,
             body: releaseBody
           })
         });
         if (patchRes.ok) {
+          releaseData = await patchRes.json();
           console.log(`🎉 成功同步更新 GitHub Release 內容！`);
         }
       }
     } else {
       console.warn(`⚠️ 建立 GitHub Release 失敗:`, errText);
+    }
+  }
+
+  // 嘗試打包與上傳 Release ZIP 資產
+  if (releaseData && releaseData.id) {
+    const zipName = `youtube-subscription-folders-${tagName}.zip`;
+    const zipPath = path.join(rootDir, zipName);
+    if (!fs.existsSync(zipPath)) {
+      try {
+        const { execSync } = require('child_process');
+        execSync(`powershell -Command "Compress-Archive -Path manifest.json, scripts, styles, options, popup, icons, README.md -DestinationPath '${zipName}' -Force"`, { cwd: rootDir });
+        console.log(`📦 已自動建立擴充功能安裝包: ${zipName}`);
+      } catch (zipErr) {
+        console.warn(`⚠️ 建立 ZIP 套件失敗:`, zipErr.message);
+      }
+    }
+
+    if (fs.existsSync(zipPath)) {
+      console.log(`🚀 正在上傳 Release 資產: ${zipName}...`);
+      const zipBuffer = fs.readFileSync(zipPath);
+      const uploadUrl = `https://uploads.github.com/repos/${owner}/${repo}/releases/${releaseData.id}/assets?name=${encodeURIComponent(zipName)}`;
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `token ${token}`,
+          'Content-Type': 'application/zip',
+          'User-Agent': 'Antigravity-Release'
+        },
+        body: zipBuffer
+      });
+
+      if (uploadRes.ok) {
+        console.log(`🎉 成功上傳 Release 資產: ${zipName}`);
+      } else {
+        const upErr = await uploadRes.text();
+        if (upErr.includes('already_exists')) {
+          console.log(`ℹ️ 資產 ${zipName} 已存在於該 Release 中。`);
+        } else {
+          console.warn(`⚠️ 上傳 Release 資產失敗:`, upErr);
+        }
+      }
     }
   }
 }
