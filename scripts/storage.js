@@ -14,6 +14,8 @@ const YTFolderStorage = (() => {
 
   const DEFAULT_SETTINGS = {
     hideWatched: false,
+    hideShorts: false,
+    onlyLive: false,
     showInSidebar: true,
     showFeedFilter: true,
     activeFeedFolderId: 'all',

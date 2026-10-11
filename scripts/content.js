@@ -10,7 +10,7 @@
 (() => {
   let cachedFolders = [];
   let cachedChannels = {};
-  let cachedSettings = { hideWatched: false, activeFeedFolderId: 'all' };
+  let cachedSettings = { hideWatched: false, hideShorts: false, onlyLive: false, activeFeedFolderId: 'all' };
   let activeFilterFolderId = 'all';
   let feedObserver = null;
   let isApplyingFilter = false;
@@ -102,6 +102,9 @@
           <button class="yt-org-btn-icon" id="yt-org-btn-open-options" title="開啟管理設定">⚙️</button>
         </div>
       </div>
+      <div class="yt-org-sidebar-search-container">
+        <input type="text" class="yt-org-sidebar-search-input" id="yt-org-sidebar-search-input" placeholder="🔍 搜尋分組或頻道..." />
+      </div>
       <ul class="yt-org-folder-list">
     `;
 
@@ -153,6 +156,56 @@
     html += `</ul>`;
     container.innerHTML = html;
 
+    const searchInput = container.querySelector('#yt-org-sidebar-search-input');
+    if (searchInput) {
+      searchInput.onkeydown = (e) => e.stopPropagation();
+      searchInput.oninput = (e) => {
+        const query = (e.target.value || '').trim().toLowerCase();
+        const folderItems = container.querySelectorAll('.yt-org-folder-item');
+        folderItems.forEach(item => {
+          const folderId = item.dataset.folderId;
+          const folder = cachedFolders.find(f => f.id === folderId);
+          if (!folder) return;
+
+          const folderNameMatch = (folder.name || '').toLowerCase().includes(query) ||
+                                  (folder.description || '').toLowerCase().includes(query);
+
+          const sublist = item.querySelector('.yt-org-channels-sublist');
+          const chevron = item.querySelector('.yt-org-folder-chevron');
+          const channelLis = sublist ? sublist.querySelectorAll('li') : [];
+          let hasMatchingChannel = false;
+
+          channelLis.forEach(li => {
+            const chTitle = li.querySelector('.yt-org-channel-title')?.textContent?.toLowerCase() || '';
+            const isMatch = chTitle.includes(query);
+            if (isMatch) {
+              hasMatchingChannel = true;
+              li.style.display = '';
+            } else {
+              li.style.display = query ? 'none' : '';
+            }
+          });
+
+          if (!query) {
+            item.style.display = '';
+            channelLis.forEach(li => li.style.display = '');
+            if (sublist && !sublist.classList.contains('user-expanded')) {
+              sublist.classList.remove('expanded');
+              chevron?.classList.remove('expanded');
+            }
+          } else if (folderNameMatch || hasMatchingChannel) {
+            item.style.display = '';
+            if (hasMatchingChannel && sublist) {
+              sublist.classList.add('expanded');
+              chevron?.classList.add('expanded');
+            }
+          } else {
+            item.style.display = 'none';
+          }
+        });
+      };
+    }
+
     const newFolderBtn = container.querySelector('#yt-org-btn-new-folder');
     if (newFolderBtn) {
       newFolderBtn.onclick = async (e) => {
@@ -183,6 +236,7 @@
         if (sublist && chevron) {
           const isExpanded = sublist.classList.toggle('expanded');
           chevron.classList.toggle('expanded', isExpanded);
+          sublist.classList.toggle('user-expanded', isExpanded);
         }
       };
 
@@ -271,6 +325,12 @@
           <button class="yt-org-toggle-watched-btn ${cachedSettings.hideWatched ? 'active' : ''}" id="yt-org-btn-hide-watched" title="在動態牆隱藏已看過的影片">
             <span>${cachedSettings.hideWatched ? '👁️‍🗨️ 已隱藏已看' : '👁️ 隱藏已看'}</span>
           </button>
+          <button class="yt-org-toggle-watched-btn ${cachedSettings.hideShorts ? 'active' : ''}" id="yt-org-btn-hide-shorts" title="在動態牆隱藏 Shorts 短片">
+            <span>${cachedSettings.hideShorts ? '🚫 已隱藏 Shorts' : '🚫 隱藏 Shorts'}</span>
+          </button>
+          <button class="yt-org-toggle-watched-btn ${cachedSettings.onlyLive ? 'active' : ''}" id="yt-org-btn-only-live" title="在動態牆僅顯示直播中的頻道與節目">
+            <span>${cachedSettings.onlyLive ? '🔴 僅顯示直播' : '📡 僅看直播'}</span>
+          </button>
         </div>
       </div>
     `;
@@ -296,6 +356,32 @@
         hideWatchedBtn.innerHTML = `<span>${newVal ? '👁️‍🗨️ 已隱藏已看' : '👁️ 隱藏已看'}</span>`;
         applyFeedFilters();
         showToast(newVal ? '已開啟：自動隱藏已觀看影片' : '已關閉：顯示所有影片');
+      };
+    }
+
+    const hideShortsBtn = container.querySelector('#yt-org-btn-hide-shorts');
+    if (hideShortsBtn) {
+      hideShortsBtn.onclick = async () => {
+        const newVal = !cachedSettings.hideShorts;
+        cachedSettings.hideShorts = newVal;
+        await YTFolderStorage.updateSettings({ hideShorts: newVal });
+        hideShortsBtn.classList.toggle('active', newVal);
+        hideShortsBtn.innerHTML = `<span>${newVal ? '🚫 已隱藏 Shorts' : '🚫 隱藏 Shorts'}</span>`;
+        applyFeedFilters();
+        showToast(newVal ? '已開啟：自動隱藏 Shorts 短片' : '已關閉：顯示 Shorts 短片');
+      };
+    }
+
+    const onlyLiveBtn = container.querySelector('#yt-org-btn-only-live');
+    if (onlyLiveBtn) {
+      onlyLiveBtn.onclick = async () => {
+        const newVal = !cachedSettings.onlyLive;
+        cachedSettings.onlyLive = newVal;
+        await YTFolderStorage.updateSettings({ onlyLive: newVal });
+        onlyLiveBtn.classList.toggle('active', newVal);
+        onlyLiveBtn.innerHTML = `<span>${newVal ? '🔴 僅顯示直播' : '📡 僅看直播'}</span>`;
+        applyFeedFilters();
+        showToast(newVal ? '已開啟：僅顯示直播中節目' : '已關閉：顯示所有影片');
       };
     }
   }
@@ -352,6 +438,8 @@
         }
 
         const hideWatched = Boolean(cachedSettings.hideWatched);
+        const hideShorts = Boolean(cachedSettings.hideShorts);
+        const onlyLive = Boolean(cachedSettings.onlyLive);
         let visibleCardCount = 0;
 
         videoCards.forEach(card => {
@@ -369,64 +457,106 @@
             card.classList.remove('yt-org-hidden-watched');
           }
 
-          // 2. Folder Channel Filter Check
-          if (activeFilterFolderId === 'all') {
-            card.classList.remove('yt-org-hidden');
-            if (!card.classList.contains('yt-org-hidden-watched')) {
-              visibleCardCount++;
-            }
-            return;
-          }
-
-          const channelLinks = card.querySelectorAll(
-            'a[href*="/@"], a[href*="/channel/"], ytd-channel-name a, #channel-name a, a#avatar-link'
-          );
-
-          let matched = false;
-          for (const link of channelLinks) {
-            const href = (link.getAttribute('href') || '').toLowerCase();
-            const text = (link.textContent || '').toLowerCase().trim();
-
-            const handleMatch = href.match(/\/@([^\/\?]+)/);
-            if (handleMatch && allowedHandles.has(handleMatch[1])) {
-              matched = true;
-              break;
-            }
-
-            const idMatch = href.match(/\/channel\/([^\/\?]+)/);
-            if (idMatch && allowedIds.has(idMatch[1])) {
-              matched = true;
-              break;
-            }
-
-            if (text && allowedNames.has(text)) {
-              matched = true;
-              break;
-            }
-          }
-
-          if (matched) {
-            card.classList.remove('yt-org-hidden');
-            if (!card.classList.contains('yt-org-hidden-watched')) {
-              visibleCardCount++;
+          // 2. Hide Shorts Check
+          if (hideShorts) {
+            const isShortsCard = Boolean(
+              card.querySelector('a[href*="/shorts/"], yt-thumbnail-overlay-badge-view-model [aria-label*="Shorts"], yt-icon[type="shorts"]') ||
+              card.closest('ytd-rich-shelf-renderer[is-shorts], ytd-reel-shelf-renderer')
+            );
+            if (isShortsCard) {
+              card.classList.add('yt-org-hidden-shorts');
+            } else {
+              card.classList.remove('yt-org-hidden-shorts');
             }
           } else {
-            card.classList.add('yt-org-hidden');
+            card.classList.remove('yt-org-hidden-shorts');
+          }
+
+          // 3. Only Live Check
+          if (onlyLive) {
+            const isLiveCard = Boolean(
+              card.querySelector(
+                '.badge-style-type-live-now, [badge-style="BADGE_STYLE_TYPE_LIVE_NOW"], [aria-label*="LIVE"], [aria-label*="直播"]'
+              ) ||
+              Array.from(card.querySelectorAll('.badge, ytd-badge-supported-renderer, .yt-badge, yt-thumbnail-badge-view-model')).some(b => {
+                const t = (b.textContent || '').trim().toUpperCase();
+                return t.includes('LIVE') || t.includes('直播');
+              })
+            );
+            if (!isLiveCard) {
+              card.classList.add('yt-org-hidden-nonlive');
+            } else {
+              card.classList.remove('yt-org-hidden-nonlive');
+            }
+          } else {
+            card.classList.remove('yt-org-hidden-nonlive');
+          }
+
+          // 4. Folder Channel Filter Check
+          if (activeFilterFolderId === 'all') {
+            card.classList.remove('yt-org-hidden');
+          } else {
+            const channelLinks = card.querySelectorAll(
+              'a[href*="/@"], a[href*="/channel/"], ytd-channel-name a, #channel-name a, a#avatar-link, .yt-core-attributed-string a'
+            );
+
+            let matched = false;
+            for (const link of channelLinks) {
+              const href = (link.getAttribute('href') || '').toLowerCase();
+              const text = (link.textContent || '').toLowerCase().trim();
+
+              const handleMatch = href.match(/\/@([^\/\?]+)/);
+              if (handleMatch && allowedHandles.has(handleMatch[1])) {
+                matched = true;
+                break;
+              }
+
+              const idMatch = href.match(/\/channel\/([^\/\?]+)/);
+              if (idMatch && allowedIds.has(idMatch[1])) {
+                matched = true;
+                break;
+              }
+
+              if (text && allowedNames.has(text)) {
+                matched = true;
+                break;
+              }
+            }
+
+            if (matched) {
+              card.classList.remove('yt-org-hidden');
+            } else {
+              card.classList.add('yt-org-hidden');
+            }
+          }
+
+          // Count visible cards
+          const isHidden = card.classList.contains('yt-org-hidden') ||
+                           card.classList.contains('yt-org-hidden-watched') ||
+                           card.classList.contains('yt-org-hidden-shorts') ||
+                           card.classList.contains('yt-org-hidden-nonlive');
+          if (!isHidden) {
+            visibleCardCount++;
           }
         });
 
-        // 3. Hide unrelated Shorts shelves when filtering by folder
+        // 5. Hide unrelated Shorts shelves when filtering by folder or hideShorts is active
         const shelfSections = document.querySelectorAll('ytd-rich-section-renderer, ytd-reel-shelf-renderer');
         shelfSections.forEach(shelf => {
-          if (activeFilterFolderId !== 'all') {
+          if (activeFilterFolderId !== 'all' || hideShorts) {
             shelf.classList.add('yt-org-hidden');
           } else {
             shelf.classList.remove('yt-org-hidden');
           }
         });
 
-        // 4. Empty State Display
+        // 6. Empty State Display
         handleFeedEmptyState(visibleCardCount);
+
+        // 7. Prevent Feed Starvation / Broken Infinite Scroll (Scroll Pump)
+        if ((activeFilterFolderId !== 'all' || hideShorts || hideWatched || onlyLive) && visibleCardCount < 6) {
+          pumpFeedIfNeeded(visibleCardCount);
+        }
 
       } finally {
         isApplyingFilter = false;
@@ -471,6 +601,86 @@
         emptyEl.style.display = 'none';
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Feed Starvation Prevention (Scroll Pump)
+  // ---------------------------------------------------------------------------
+  let isPumping = false;
+  let pumpAttempts = 0;
+  let lastPumpKey = '';
+
+  function pumpFeedIfNeeded(visibleCount) {
+    if (isPumping) return;
+    if (!window.location.pathname.startsWith('/feed/subscriptions')) return;
+
+    const currentKey = `${activeFilterFolderId}_${cachedSettings.hideShorts}_${cachedSettings.hideWatched}_${cachedSettings.onlyLive}`;
+    if (lastPumpKey !== currentKey) {
+      lastPumpKey = currentKey;
+      pumpAttempts = 0;
+    }
+
+    if (pumpAttempts >= 5) return;
+
+    const continuation = document.querySelector('ytd-continuation-item-renderer');
+    if (!continuation) return;
+
+    isPumping = true;
+    pumpAttempts++;
+
+    try {
+      continuation.scrollIntoView({ behavior: 'auto', block: 'end' });
+      window.scrollBy(0, 100);
+    } catch (e) {}
+
+    setTimeout(() => {
+      isPumping = false;
+      applyFeedFilters();
+    }, 600);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Keyboard Shortcuts (Alt + 0~9)
+  // ---------------------------------------------------------------------------
+  let shortcutsInitialized = false;
+  function setupKeyboardShortcuts() {
+    if (shortcutsInitialized) return;
+    shortcutsInitialized = true;
+
+    document.addEventListener('keydown', (e) => {
+      if (!window.location.pathname.startsWith('/feed/subscriptions')) return;
+
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
+        return;
+      }
+
+      if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        if (e.key === '0') {
+          e.preventDefault();
+          activeFilterFolderId = 'all';
+          YTFolderStorage.updateSettings({ activeFeedFolderId: 'all' });
+          updateFeedFilterChipsUI();
+          applyFeedFilters();
+          showToast('快捷鍵 Alt+0：切換至【全部動態】');
+          return;
+        }
+
+        const num = parseInt(e.key, 10);
+        if (num >= 1 && num <= 9) {
+          e.preventDefault();
+          const folderIdx = num - 1;
+          if (cachedFolders && cachedFolders[folderIdx]) {
+            const folder = cachedFolders[folderIdx];
+            activeFilterFolderId = folder.id;
+            YTFolderStorage.updateSettings({ activeFeedFolderId: folder.id });
+            updateFeedFilterChipsUI();
+            applyFeedFilters();
+            showToast(`快捷鍵 Alt+${num}：切換至【${folder.name}】`);
+          }
+        }
+      }
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1068,6 +1278,7 @@
     checkAndInjectChannelTagger();
     checkAndInjectChannelsSyncBanner();
     monitorChannelSubscribeButtonState();
+    setupKeyboardShortcuts();
   }
 
   window.addEventListener('yt-navigate-finish', onPageUpdate);

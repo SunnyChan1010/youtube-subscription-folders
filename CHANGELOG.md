@@ -4,6 +4,25 @@
 
 ---
 
+## [1.1.0] - 2026-10-11
+
+### 🚀 新增功能 (Added)
+- **動態牆自動推進機制 (Scroll Pump Engine)**：
+  - 徹底解決冷門分組與強過濾條件下的「分頁飢餓 / 滾動卡死 (Feed Starvation)」問題。
+  - 當過濾後可視影片數量小於 6 部且 YouTube 底部 continuation 載入哨兵存在時，自動發起安全且限額（上限 5 次）的自動推進滾動，確保頻道歷史影片正常載入。
+- **🚫 隱藏 Shorts 短片專屬過濾開關**：
+  - 於訂閱動態牆頂部 Chips 區域加入「🚫 隱藏 Shorts」獨立快捷按鈕，即時過濾動態牆中所有的 Shorts 短片卡片及 Shorts 推薦貨架。
+- **🔴 直播中節目快篩開關**：
+  - 新增「🔴 僅顯示直播」開關，即時掃描並篩選出正在進行實況直播的頻道，方便快速追蹤熱門動態。
+- **側邊欄分組即時搜尋框 (`#yt-org-sidebar-search-input`)**：
+  - 於左側邊欄「📁 分組訂閱」頂部加入緊湊搜尋列，輸入關鍵字即時篩選分組名稱與所屬頻道，並自動展開匹配分組之子頻道列表。
+- **鍵盤快捷鍵切換 (`Alt + 0~9`)**：
+  - 在 `/feed/subscriptions` 頁面支援快捷鍵導航：`Alt + 0` 快速切換至「全部動態」，`Alt + 1` 至 `Alt + 9` 快速切換前 9 個分組，具備操作 Toast 視覺反饋。
+- **自適應容錯 DOM 選擇器引擎 (Resilient Fallback Selectors)**：
+  - 支援 `yt-lockup-view-model`、`.yt-core-attributed-string a` 等 YouTube 最新 Web Components / Polymer 節點結構，大幅提升抗改版穩定性。
+
+---
+
 ## [1.0.4] - 2026-09-23
 
 ### 🐛 問題修復 (Fixed)

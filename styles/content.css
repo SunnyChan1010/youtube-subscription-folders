@@ -12,6 +12,14 @@
   display: none !important;
 }
 
+.yt-org-hidden-shorts {
+  display: none !important;
+}
+
+.yt-org-hidden-nonlive {
+  display: none !important;
+}
+
 /* --------------------------------------------------------------------------
    1. Left Sidebar / Guide Section
    -------------------------------------------------------------------------- */
@@ -78,6 +86,32 @@ html[dark] .yt-org-sidebar-header:hover {
 .yt-org-btn-icon:hover {
   opacity: 1;
   background-color: var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.1));
+}
+
+.yt-org-sidebar-search-container {
+  padding: 4px 16px 8px 24px;
+}
+
+.yt-org-sidebar-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.15));
+  background: var(--yt-spec-badge-chip-background, rgba(0, 0, 0, 0.05));
+  color: var(--yt-spec-text-primary, #0f0f0f);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+html[dark] .yt-org-sidebar-search-input {
+  background: var(--yt-spec-badge-chip-background, rgba(255, 255, 255, 0.08));
+  color: var(--yt-spec-text-primary, #f1f1f1);
+}
+
+.yt-org-sidebar-search-input:focus {
+  border-color: #ff0033;
 }
 
 .yt-org-folder-list {
