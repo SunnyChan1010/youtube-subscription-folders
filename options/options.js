@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // DOM Elements
   const foldersListEl = document.getElementById('folders-list-el');
   const folderCountBadge = document.getElementById('folder-count-badge');
+  const inputSearchFolders = document.getElementById('input-search-folders');
   const channelsGridEl = document.getElementById('channels-grid-el');
   const headerFolderIcon = document.getElementById('header-folder-icon');
   const headerFolderName = document.getElementById('header-folder-name');
@@ -161,12 +162,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderActiveFolderChannels();
   }
 
-  function renderFolders() {
+  function renderFolders(searchQuery = '') {
     folderCountBadge.textContent = `${allFolders.length} 個分組`;
     foldersListEl.innerHTML = '';
 
-    // 1. Normal Folders
-    allFolders.forEach((folder, idx) => {
+    const q = (searchQuery !== undefined && searchQuery !== null ? searchQuery : (inputSearchFolders ? inputSearchFolders.value : '')).trim().toLowerCase();
+
+    // 1. Normal Folders (Filtered if query present)
+    const filteredFolders = q
+      ? allFolders.filter(f => (f.name && f.name.toLowerCase().includes(q)) || (f.description && f.description.toLowerCase().includes(q)))
+      : allFolders;
+
+    filteredFolders.forEach((folder) => {
+      const realIdx = allFolders.findIndex(f => f.id === folder.id);
       const count = folder.channels ? folder.channels.length : 0;
       const isActive = folder.id === activeFolderId;
 
@@ -181,8 +189,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           </div>
         </div>
         <div class="folder-item-actions">
-          <button class="btn-icon-sm btn-move-up" title="上移分組順序" ${idx === 0 ? 'disabled style="opacity:0.3;"' : ''}>▲</button>
-          <button class="btn-icon-sm btn-move-down" title="下移分組順序" ${idx === allFolders.length - 1 ? 'disabled style="opacity:0.3;"' : ''}>▼</button>
+          <button class="btn-icon-sm btn-move-up" title="上移分組順序" ${(realIdx === 0 || q) ? 'disabled style="opacity:0.3;"' : ''}>▲</button>
+          <button class="btn-icon-sm btn-move-down" title="下移分組順序" ${(realIdx === allFolders.length - 1 || q) ? 'disabled style="opacity:0.3;"' : ''}>▼</button>
           <button class="btn-icon-sm btn-edit" title="編輯分組">✏️</button>
           <button class="btn-icon-sm btn-delete" title="刪除分組">🗑️</button>
         </div>
@@ -196,10 +204,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       item.querySelector('.btn-move-up').onclick = async (e) => {
         e.stopPropagation();
-        if (idx > 0) {
-          const temp = allFolders[idx];
-          allFolders[idx] = allFolders[idx - 1];
-          allFolders[idx - 1] = temp;
+        if (realIdx > 0) {
+          const temp = allFolders[realIdx];
+          allFolders[realIdx] = allFolders[realIdx - 1];
+          allFolders[realIdx - 1] = temp;
           await YTFolderStorage.setFolders(allFolders);
           renderFolders();
         }
@@ -207,10 +215,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       item.querySelector('.btn-move-down').onclick = async (e) => {
         e.stopPropagation();
-        if (idx < allFolders.length - 1) {
-          const temp = allFolders[idx];
-          allFolders[idx] = allFolders[idx + 1];
-          allFolders[idx + 1] = temp;
+        if (realIdx < allFolders.length - 1) {
+          const temp = allFolders[realIdx];
+          allFolders[realIdx] = allFolders[realIdx + 1];
+          allFolders[realIdx + 1] = temp;
           await YTFolderStorage.setFolders(allFolders);
           renderFolders();
         }
@@ -229,27 +237,36 @@ document.addEventListener('DOMContentLoaded', async () => {
       foldersListEl.appendChild(item);
     });
 
-    // 2. Smart "未分類頻道" Item
-    const uncatItem = document.createElement('div');
-    const isUncatActive = activeFolderId === '__uncategorized__';
-    uncatItem.className = `folder-item ${isUncatActive ? 'active' : ''}`;
-    uncatItem.style.borderTop = '1px dashed var(--border)';
-    uncatItem.style.marginTop = '8px';
-    uncatItem.innerHTML = `
-      <div class="folder-item-left">
-        <span class="folder-item-icon">📂</span>
-        <div class="folder-item-details">
-          <div class="folder-item-name">未分類頻道</div>
-          <div class="folder-item-meta">${uncategorizedChannels.length} 個尚未分類</div>
+    if (filteredFolders.length === 0 && q) {
+      const emptyNote = document.createElement('div');
+      emptyNote.style.cssText = 'padding: 16px 12px; font-size: 12.5px; color: var(--text-secondary); text-align: center;';
+      emptyNote.textContent = `無符合「${q}」的分組`;
+      foldersListEl.appendChild(emptyNote);
+    }
+
+    // 2. Smart "未分類頻道" Item (show if no query or matches query)
+    if (!q || '未分類頻道'.includes(q)) {
+      const uncatItem = document.createElement('div');
+      const isUncatActive = activeFolderId === '__uncategorized__';
+      uncatItem.className = `folder-item ${isUncatActive ? 'active' : ''}`;
+      uncatItem.style.borderTop = '1px dashed var(--border)';
+      uncatItem.style.marginTop = '8px';
+      uncatItem.innerHTML = `
+        <div class="folder-item-left">
+          <span class="folder-item-icon">📂</span>
+          <div class="folder-item-details">
+            <div class="folder-item-name">未分類頻道</div>
+            <div class="folder-item-meta">${uncategorizedChannels.length} 個尚未分類</div>
+          </div>
         </div>
-      </div>
-    `;
-    uncatItem.onclick = () => {
-      activeFolderId = '__uncategorized__';
-      renderFolders();
-      renderActiveFolderChannels();
-    };
-    foldersListEl.appendChild(uncatItem);
+      `;
+      uncatItem.onclick = () => {
+        activeFolderId = '__uncategorized__';
+        renderFolders();
+        renderActiveFolderChannels();
+      };
+      foldersListEl.appendChild(uncatItem);
+    }
   }
 
   function renderActiveFolderChannels(searchQuery = '') {
@@ -372,6 +389,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       card.className = 'channel-card';
       const defaultAvatar = DEFAULT_AVATAR;
       const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
+      const otherFolders = allFolders.filter(f => f.id !== folder.id);
+      const moveOptions = otherFolders.map(f => `<option value="${f.id}">📁 ${escapeHtml(f.name)}</option>`).join('');
 
       card.innerHTML = `
         <img class="channel-card-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
@@ -379,10 +398,30 @@ document.addEventListener('DOMContentLoaded', async () => {
           <a class="channel-card-title" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
           <div class="channel-card-handle">${escapeHtml(ch.handle || ch.id)}</div>
         </div>
-        <div class="channel-card-actions">
+        <div class="channel-card-actions" style="display: flex; align-items: center; gap: 6px;">
+          ${otherFolders.length > 0 ? `
+            <select class="select-folder-move input-text" style="padding: 4px 6px; font-size: 11.5px; width: 110px;" title="移動至其他分組">
+              <option value="">移至分組...</option>
+              ${moveOptions}
+            </select>
+          ` : ''}
           <button class="btn-icon-sm btn-remove-channel" title="自此分組移除">✕</button>
         </div>
       `;
+
+      const moveSelect = card.querySelector('.select-folder-move');
+      if (moveSelect) {
+        moveSelect.onchange = async (e) => {
+          const targetFolderId = e.target.value;
+          if (targetFolderId) {
+            const targetFolder = allFolders.find(f => f.id === targetFolderId);
+            await YTFolderStorage.removeChannelFromFolder(folder.id, ch.id);
+            await YTFolderStorage.addChannelToFolder(targetFolderId, ch);
+            showToast(`已將「${ch.name || ch.handle || ch.id}」移至「${targetFolder?.name || '分組'}」`);
+            await loadData();
+          }
+        };
+      }
 
       card.querySelector('.btn-remove-channel').onclick = async () => {
         await YTFolderStorage.removeChannelFromFolder(folder.id, ch.id);
@@ -522,6 +561,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   inputAddChannelHandle.onkeydown = (e) => {
     if (e.key === 'Enter') handleAddChannel();
   };
+
+  if (inputSearchFolders) {
+    inputSearchFolders.oninput = (e) => {
+      renderFolders(e.target.value);
+    };
+  }
 
   inputSearchChannels.oninput = (e) => {
     renderActiveFolderChannels(e.target.value);

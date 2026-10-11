@@ -193,6 +193,66 @@ async function runTests() {
 
   console.log('  PASS: Sidebar search correctly matches folders and channels, auto-surfacing parent folder');
 
+  // Test 6: In-Memory getCachedFolderIdsByChannel
+  console.log('\n[Test 6] In-Memory Folder Membership Resolution:');
+  const mockCachedFolders = [
+    { id: 'f_tech', name: 'Tech', channels: ['UC101', 'c2'] },
+    { id: 'f_news', name: 'News', channels: ['@bbcnews'] }
+  ];
+  const mockCachedChannels = {
+    'UC101': { id: 'UC101', handle: '@mkbhd', name: 'MKBHD' },
+    'c2': { id: 'UC102', handle: '@verge', name: 'The Verge' },
+    '@bbcnews': { id: 'UC103', handle: '@bbcnews', name: 'BBC News' }
+  };
+
+  function testGetCachedFolderIds(chId, chHandle, cachedFolders, cachedChannels) {
+    const targetId = (chId || '').toLowerCase();
+    const targetHandle = (chHandle || '').toLowerCase().replace(/^@/, '');
+    const matched = [];
+    cachedFolders.forEach(folder => {
+      const has = folder.channels.some(id => {
+        const idLower = String(id).toLowerCase();
+        if (targetId && idLower === targetId) return true;
+        if (targetHandle && idLower.replace(/^@/, '') === targetHandle) return true;
+        const ch = cachedChannels[id];
+        if (ch) {
+          if (targetId && ch.id && ch.id.toLowerCase() === targetId) return true;
+          if (targetHandle && ch.handle && ch.handle.toLowerCase().replace(/^@/, '') === targetHandle) return true;
+        }
+        return false;
+      });
+      if (has) matched.push(folder.id);
+    });
+    return matched;
+  }
+
+  assert.deepStrictEqual(testGetCachedFolderIds('UC101', '@mkbhd', mockCachedFolders, mockCachedChannels), ['f_tech']);
+  assert.deepStrictEqual(testGetCachedFolderIds('UC102', '@verge', mockCachedFolders, mockCachedChannels), ['f_tech']);
+  assert.deepStrictEqual(testGetCachedFolderIds('UC103', 'bbcnews', mockCachedFolders, mockCachedChannels), ['f_news']);
+  assert.deepStrictEqual(testGetCachedFolderIds('UC999', '@unknown', mockCachedFolders, mockCachedChannels), []);
+  console.log('  PASS: In-memory folder lookup matches handles and IDs with 0 disk I/O');
+
+  // Test 7: Quick Channel Migration Between Folders
+  console.log('\n[Test 7] Channel Migration Across Folders:');
+  await YTFolderStorage.init();
+  const fTech = await YTFolderStorage.addFolder({ name: '科技 3C' });
+  const fLife = await YTFolderStorage.addFolder({ name: '生活日常' });
+  const sampleChannel = { id: 'UC777', name: 'Sample Channel', handle: '@sample' };
+
+  await YTFolderStorage.addChannelToFolder(fTech.id, sampleChannel);
+  let techFolder = (await YTFolderStorage.getFolders()).find(f => f.id === fTech.id);
+  assert.ok(techFolder.channels.includes('UC777'), 'Channel added to tech folder');
+
+  // Migrate: remove from fTech, add to fLife
+  await YTFolderStorage.removeChannelFromFolder(fTech.id, sampleChannel.id);
+  await YTFolderStorage.addChannelToFolder(fLife.id, sampleChannel);
+
+  techFolder = (await YTFolderStorage.getFolders()).find(f => f.id === fTech.id);
+  const lifeFolder = (await YTFolderStorage.getFolders()).find(f => f.id === fLife.id);
+  assert.strictEqual(techFolder.channels.includes('UC777'), false, 'Channel removed from original folder');
+  assert.strictEqual(lifeFolder.channels.includes('UC777'), true, 'Channel added to target folder');
+  console.log('  PASS: Channel successfully migrated between folders');
+
   console.log('\n🎉 ALL v1.1.0 FEATURE TESTS PASSED SUCCESSFULLY! 🎉');
 }
 

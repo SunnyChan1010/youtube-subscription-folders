@@ -23,9 +23,10 @@
   const DEFAULT_AVATAR = (typeof YT_DEFAULT_AVATAR !== 'undefined' ? YT_DEFAULT_AVATAR : "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9IiMyODI4MjgiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjgiIHI9IjMuNiIgZmlsbD0iI2FhYWFhYSIvPjxwYXRoIGQ9Ik0xMiAxMy41Yy0zIDAtNi41IDEuNS02LjUgMy41djEuNWgxM3YtMS41YzAtMi0zLjUtMy41LTYuNS0zLjV6IiBmaWxsPSIjYWFhYWFhIi8+PC9zdmc+");
 
   document.addEventListener('error', (e) => {
-    if (e.target && e.target.tagName === 'IMG' && e.target.classList.contains('yt-org-channel-avatar')) {
-      if (e.target.src !== DEFAULT_AVATAR) {
-        e.target.src = DEFAULT_AVATAR;
+    if (e.target && e.target.tagName === 'IMG') {
+      const defaultSrc = e.target.dataset.defaultSrc || DEFAULT_AVATAR;
+      if (e.target.src !== defaultSrc) {
+        e.target.src = defaultSrc;
       }
     }
   }, true);
@@ -91,6 +92,9 @@
   }
 
   function renderSidebarContent(container) {
+    const existingSearchInput = container.querySelector('#yt-org-sidebar-search-input');
+    const prevSearchQuery = existingSearchInput ? existingSearchInput.value : '';
+
     let html = `
       <div class="yt-org-sidebar-header" title="點擊展開/收合分組">
         <div class="yt-org-header-title">
@@ -103,7 +107,7 @@
         </div>
       </div>
       <div class="yt-org-sidebar-search-container">
-        <input type="text" class="yt-org-sidebar-search-input" id="yt-org-sidebar-search-input" placeholder="🔍 搜尋分組或頻道..." />
+        <input type="text" class="yt-org-sidebar-search-input" id="yt-org-sidebar-search-input" placeholder="🔍 搜尋分組或頻道..." value="${escapeHtml(prevSearchQuery)}" />
       </div>
       <ul class="yt-org-folder-list">
     `;
@@ -111,6 +115,7 @@
     cachedFolders.forEach(folder => {
       const channelCount = folder.channels ? folder.channels.length : 0;
       const isFilterActive = (window.location.pathname.startsWith('/feed/subscriptions') && activeFilterFolderId === folder.id);
+      const isExpanded = Boolean(cachedSettings.expandedFolders && cachedSettings.expandedFolders[folder.id]);
       const safeDesc = escapeHtml(folder.description || folder.name);
       const safeFolderName = escapeHtml(folder.name);
 
@@ -120,9 +125,9 @@
             <span class="yt-org-folder-icon">${folder.icon || '📁'}</span>
             <span class="yt-org-folder-name">${safeFolderName}</span>
             <span class="yt-org-folder-badge">${channelCount}</span>
-            <span class="yt-org-folder-chevron">▶</span>
+            <span class="yt-org-folder-chevron ${isExpanded ? 'expanded' : ''}">▶</span>
           </div>
-          <ul class="yt-org-channels-sublist" id="yt-org-sublist-${folder.id}">
+          <ul class="yt-org-channels-sublist ${isExpanded ? 'expanded' : ''}" id="yt-org-sublist-${folder.id}">
       `;
 
       if (folder.channels && folder.channels.length > 0) {
@@ -189,7 +194,8 @@
           if (!query) {
             item.style.display = '';
             channelLis.forEach(li => li.style.display = '');
-            if (sublist && !sublist.classList.contains('user-expanded')) {
+            const wasExpanded = Boolean(cachedSettings.expandedFolders && cachedSettings.expandedFolders[folder.id]);
+            if (sublist && !sublist.classList.contains('user-expanded') && !wasExpanded) {
               sublist.classList.remove('expanded');
               chevron?.classList.remove('expanded');
             }
@@ -204,6 +210,10 @@
           }
         });
       };
+
+      if (prevSearchQuery) {
+        searchInput.dispatchEvent(new Event('input'));
+      }
     }
 
     const newFolderBtn = container.querySelector('#yt-org-btn-new-folder');
@@ -232,11 +242,14 @@
       const sublist = folderItem?.querySelector('.yt-org-channels-sublist');
       const chevron = row.querySelector('.yt-org-folder-chevron');
 
-      row.onclick = () => {
+      row.onclick = async () => {
         if (sublist && chevron) {
-          const isExpanded = sublist.classList.toggle('expanded');
-          chevron.classList.toggle('expanded', isExpanded);
-          sublist.classList.toggle('user-expanded', isExpanded);
+          const isExp = sublist.classList.toggle('expanded');
+          chevron.classList.toggle('expanded', isExp);
+          sublist.classList.toggle('user-expanded', isExp);
+          if (!cachedSettings.expandedFolders) cachedSettings.expandedFolders = {};
+          cachedSettings.expandedFolders[folderId] = isExp;
+          await YTFolderStorage.updateSettings({ expandedFolders: cachedSettings.expandedFolders });
         }
       };
 
@@ -686,6 +699,7 @@
   // ---------------------------------------------------------------------------
   // 3. Global Floating Dropdown Menu (immune to container overflow: hidden)
   // ---------------------------------------------------------------------------
+  let floatingDropdownListenersBound = false;
   function getOrCreateFloatingDropdown() {
     if (globalFloatingDropdown && document.body.contains(globalFloatingDropdown)) {
       return globalFloatingDropdown;
@@ -696,20 +710,23 @@
     document.body.appendChild(menu);
     globalFloatingDropdown = menu;
 
-    document.addEventListener('click', (e) => {
-      if (currentDropdownTriggerBtn && currentDropdownTriggerBtn.contains(e.target)) {
-        return;
-      }
-      if (!menu.contains(e.target)) {
-        menu.classList.remove('show');
-      }
-    });
+    if (!floatingDropdownListenersBound) {
+      floatingDropdownListenersBound = true;
+      document.addEventListener('click', (e) => {
+        if (currentDropdownTriggerBtn && currentDropdownTriggerBtn.contains(e.target)) {
+          return;
+        }
+        if (globalFloatingDropdown && !globalFloatingDropdown.contains(e.target)) {
+          globalFloatingDropdown.classList.remove('show');
+        }
+      });
 
-    window.addEventListener('scroll', () => {
-      if (menu.classList.contains('show')) {
-        menu.classList.remove('show');
-      }
-    }, { passive: true });
+      window.addEventListener('scroll', () => {
+        if (globalFloatingDropdown && globalFloatingDropdown.classList.contains('show')) {
+          globalFloatingDropdown.classList.remove('show');
+        }
+      }, { passive: true });
+    }
 
     return menu;
   }
@@ -719,7 +736,7 @@
     currentDropdownChannelInfo = channelInfo;
     currentDropdownTriggerBtn = btn;
 
-    const memberFolderIds = await YTFolderStorage.getFoldersByChannel(channelInfo.id, channelInfo.handle);
+    const memberFolderIds = getCachedFolderIdsByChannel(channelInfo.id, channelInfo.handle);
     const safeChannelDisplayName = escapeHtml(channelInfo.name || channelInfo.handle);
 
     dropdown.innerHTML = `
@@ -764,6 +781,30 @@
     });
   }
 
+  function getCachedFolderIdsByChannel(chId, chHandle) {
+    const targetId = (chId || '').toLowerCase();
+    const targetHandle = (chHandle || '').toLowerCase().replace(/^@/, '');
+    const matched = [];
+    if (!Array.isArray(cachedFolders)) return matched;
+
+    cachedFolders.forEach(folder => {
+      if (!Array.isArray(folder.channels)) return;
+      const has = folder.channels.some(id => {
+        const idLower = String(id).toLowerCase();
+        if (targetId && idLower === targetId) return true;
+        if (targetHandle && idLower.replace(/^@/, '') === targetHandle) return true;
+        const ch = cachedChannels[id];
+        if (ch) {
+          if (targetId && ch.id && ch.id.toLowerCase() === targetId) return true;
+          if (targetHandle && ch.handle && ch.handle.toLowerCase().replace(/^@/, '') === targetHandle) return true;
+        }
+        return false;
+      });
+      if (has) matched.push(folder.id);
+    });
+    return matched;
+  }
+
   function getPageSubscriptionState() {
     const subBtn = document.querySelector(
       'yt-subscribe-button-view-model button, subscribe-button-view-model button, #owner #subscribe-button button, ytd-subscribe-button-renderer button, #subscribe-button button'
@@ -791,7 +832,7 @@
     if (!btn || !channelInfo) return;
 
     const subState = getPageSubscriptionState();
-    let memberFolderIds = await YTFolderStorage.getFoldersByChannel(channelInfo.id, channelInfo.handle);
+    let memberFolderIds = getCachedFolderIdsByChannel(channelInfo.id, channelInfo.handle);
 
     // If channel is definitely unsubscribed on YouTube, it MUST NOT be in any folder!
     if (subState === 'UNSUBSCRIBED' && memberFolderIds.length > 0) {
@@ -878,10 +919,13 @@
       const existingRect = existing.getBoundingClientRect();
       const isRenderedAndVisible = existing.dataset.channelKey === channelKey && (existingRect.width > 0 && existingRect.height > 0);
       if (isRenderedAndVisible) {
-        // Continuously update button appearance with current live subscription state
-        const existingBtn = existing.querySelector('#yt-org-tagger-toggle-btn');
-        if (existingBtn) {
-          updateTaggerButtonAppearance(existingBtn, channelInfo);
+        const currentSubState = getPageSubscriptionState();
+        if (existing.dataset.lastSubState !== currentSubState) {
+          existing.dataset.lastSubState = currentSubState;
+          const existingBtn = existing.querySelector('#yt-org-tagger-toggle-btn');
+          if (existingBtn) {
+            updateTaggerButtonAppearance(existingBtn, channelInfo);
+          }
         }
         return;
       }
@@ -896,6 +940,7 @@
     wrapper.id = 'yt-org-channel-tagger-wrapper';
     wrapper.className = 'yt-org-channel-tagger-container';
     wrapper.dataset.channelKey = channelKey;
+    wrapper.dataset.lastSubState = getPageSubscriptionState();
 
     const btn = document.createElement('button');
     btn.id = 'yt-org-tagger-toggle-btn';
@@ -1292,15 +1337,6 @@
       checkAndInjectFeedFilter();
     }
   });
-
-  // Safe image error handler (replaces inline onerror CSP violation)
-  document.addEventListener('error', (e) => {
-    if (e.target && e.target.tagName === 'IMG' && e.target.dataset.defaultSrc) {
-      if (e.target.src !== e.target.dataset.defaultSrc) {
-        e.target.src = e.target.dataset.defaultSrc;
-      }
-    }
-  }, true);
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === 'PING') {
