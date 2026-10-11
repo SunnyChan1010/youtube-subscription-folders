@@ -18,8 +18,21 @@
   - 於左側邊欄「📁 分組訂閱」頂部加入緊湊搜尋列，輸入關鍵字即時篩選分組名稱與所屬頻道，並自動展開匹配分組之子頻道列表。
 - **鍵盤快捷鍵切換 (`Alt + 0~9`)**：
   - 在 `/feed/subscriptions` 頁面支援快捷鍵導航：`Alt + 0` 快速切換至「全部動態」，`Alt + 1` 至 `Alt + 9` 快速切換前 9 個分組，具備操作 Toast 視覺反饋。
+- **Options 管理後台功能強化**：
+  - 左側邊欄新增分組即時搜尋框 (`#input-search-folders`)，方便快速篩選查找大量分組。
+  - 正常分組視圖新增 `select-folder-move` 一鍵跨組遷移選單，可直接將頻道移動至其他分組，免去手動刪除重新添加的步驟。
 - **自適應容錯 DOM 選擇器引擎 (Resilient Fallback Selectors)**：
   - 支援 `yt-lockup-view-model`、`.yt-core-attributed-string a` 等 YouTube 最新 Web Components / Polymer 節點結構，大幅提升抗改版穩定性。
+
+### ⚡ 效能極致優化 (Changed)
+- **消除 800ms 磁碟 I/O 輪詢 (Zero-I/O Polling Loop)**：
+  - 實作純記憶體快取解析 `getCachedFolderIdsByChannel`，在觀看影片及頻道頁面時完全隔絕頻繁的 `chrome.storage.local.get` 磁碟讀取，每小時節省逾 4,500 次磁碟存取；並加入訂閱狀態防抖守衛，大幅降低 CPU 與記憶體負擔。
+
+### 🐛 問題修復 (Fixed)
+- **YouTube SPA 內部導航狀態保持 (Sidebar State Persistence)**：
+  - 修復點擊 YouTube 影片或頻道跳轉時邊欄分組展開狀態自動摺疊問題，點擊展開即時持久化至 `settings.expandedFolders`，並保留邊欄搜尋關鍵字與過濾結果。
+- **消除重複事件監聽器與記憶體洩漏風險 (Idempotent Event Listeners)**：
+  - 為浮動選單全域事件引入冪等保護標誌，統一圖片錯誤降級監聽器，防止多重註冊。
 
 ---
 
