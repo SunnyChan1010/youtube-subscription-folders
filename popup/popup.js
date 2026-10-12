@@ -63,7 +63,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         card.className = 'folder-card';
         card.innerHTML = `
           <div class="folder-card-main">
-            <span class="folder-card-icon">${folder.icon || '📁'}</span>
+            <span class="folder-card-icon">${escapeHtml(folder.icon || '📁')}</span>
             <div class="folder-card-info">
               <div class="folder-card-name">${escapeHtml(folder.name)}</div>
               <div class="folder-card-meta">${count} 個頻道</div>
@@ -123,7 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         card.className = 'folder-card';
         card.innerHTML = `
           <div class="folder-card-main">
-            <span class="folder-card-icon">${folder.icon || '📁'}</span>
+            <span class="folder-card-icon">${escapeHtml(folder.icon || '📁')}</span>
             <div class="folder-card-info">
               <div class="folder-card-name">${escapeHtml(folder.name)}</div>
               <div class="folder-card-meta">${count} 個頻道</div>
@@ -170,7 +170,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         let foldersHtml = '';
         if (inFolders.length > 0) {
           foldersHtml = inFolders.map(f =>
-            `<span class="search-folder-tag" data-folder-id="${f.id}" title="點擊在動態牆只看此分組">${f.icon || '📁'} ${escapeHtml(f.name)}</span>`
+            `<span class="search-folder-tag" data-folder-id="${escapeHtml(f.id)}" title="點擊在動態牆只看此分組">${escapeHtml(f.icon || '📁')} ${escapeHtml(f.name)}</span>`
           ).join('');
         } else {
           foldersHtml = `<span class="search-folder-tag unassigned">尚未加入任何分組</span>`;
@@ -179,7 +179,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const defaultAvatar = DEFAULT_AVATAR;
         item.innerHTML = `
           <div class="search-result-top">
-            <img class="search-result-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
+            <img class="search-result-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
             <div class="search-result-info">
               <div class="search-result-name">${escapeHtml(ch.name || ch.handle)}</div>
               <div class="search-result-handle">${escapeHtml(ch.handle || ch.id)}</div>

@@ -49,6 +49,50 @@ const YTFolderStorage = (() => {
     return false;
   }
 
+  function sanitizeAvatarUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    const trimmed = url.trim();
+    if (/^https?:\/\//i.test(trimmed) || /^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,/i.test(trimmed)) {
+      return trimmed;
+    }
+    return '';
+  }
+
+  function sanitizeFolderColor(color) {
+    if (!color || typeof color !== 'string') return '#2196f3';
+    const trimmed = color.trim();
+    return /^#[0-9a-fA-F]{3,8}$/.test(trimmed) ? trimmed : '#2196f3';
+  }
+
+  function sanitizeFolderIcon(icon) {
+    if (!icon || typeof icon !== 'string') return '📁';
+    const clean = icon.replace(/[<>"'&]/g, '').trim();
+    return clean ? clean.slice(0, 10) : '📁';
+  }
+
+  function sanitizeSettings(incoming) {
+    if (!incoming || typeof incoming !== 'object') return {};
+    const safe = {};
+    const validKeys = ['hideWatched', 'hideShorts', 'onlyLive', 'showInSidebar', 'showFeedFilter', 'activeFeedFolderId', 'expandedFolders'];
+    for (const key of validKeys) {
+      if (key in incoming && key !== '__proto__' && key !== 'constructor' && key !== 'prototype') {
+        if (key === 'expandedFolders') {
+          if (incoming.expandedFolders && typeof incoming.expandedFolders === 'object' && !Array.isArray(incoming.expandedFolders)) {
+            safe.expandedFolders = {};
+            for (const [k, v] of Object.entries(incoming.expandedFolders)) {
+              if (k !== '__proto__' && k !== 'constructor' && k !== 'prototype') {
+                safe.expandedFolders[String(k).slice(0, 64)] = Boolean(v);
+              }
+            }
+          }
+        } else if (typeof incoming[key] === typeof DEFAULT_SETTINGS[key]) {
+          safe[key] = incoming[key];
+        }
+      }
+    }
+    return safe;
+  }
+
   async function getRaw(keys) {
     return new Promise((resolve) => {
       chrome.storage.local.get(keys, (res) => resolve(res || {}));
@@ -214,10 +258,10 @@ const YTFolderStorage = (() => {
     const folders = await getFolders();
     const newFolder = {
       id: `folder_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-      name: name.trim(),
-      icon: icon || '📁',
-      color: color || '#2196f3',
-      description: description || '',
+      name: String(name || '').trim(),
+      icon: sanitizeFolderIcon(icon),
+      color: sanitizeFolderColor(color),
+      description: String(description || '').trim(),
       channels: []
     };
     folders.push(newFolder);
@@ -229,7 +273,12 @@ const YTFolderStorage = (() => {
     const folders = await getFolders();
     const idx = folders.findIndex(f => f.id === id);
     if (idx === -1) return null;
-    folders[idx] = Object.assign({}, folders[idx], changes);
+    const safeChanges = { ...changes };
+    if (safeChanges.icon !== undefined) safeChanges.icon = sanitizeFolderIcon(safeChanges.icon);
+    if (safeChanges.color !== undefined) safeChanges.color = sanitizeFolderColor(safeChanges.color);
+    if (safeChanges.name !== undefined) safeChanges.name = String(safeChanges.name).trim();
+    if (safeChanges.description !== undefined) safeChanges.description = String(safeChanges.description).trim();
+    folders[idx] = Object.assign({}, folders[idx], safeChanges);
     await setFolders(folders);
     return folders[idx];
   }
@@ -315,7 +364,7 @@ const YTFolderStorage = (() => {
           id: rawId || (rawHandle.startsWith('@') ? rawHandle : '@' + rawHandle),
           handle: rawHandle ? (rawHandle.startsWith('@') ? rawHandle : '@' + rawHandle) : '',
           name: rawName || rawHandle || rawId,
-          avatarUrl: rawAvatar,
+          avatarUrl: sanitizeAvatarUrl(rawAvatar),
           isSubscribed: Boolean(raw.isSubscribed)
         };
         canonicalList.push(canon);
@@ -328,7 +377,7 @@ const YTFolderStorage = (() => {
           canon.handle = rawHandle.startsWith('@') ? rawHandle : '@' + rawHandle;
         }
         if (!canon.avatarUrl && rawAvatar) {
-          canon.avatarUrl = rawAvatar;
+          canon.avatarUrl = sanitizeAvatarUrl(rawAvatar);
         }
         if (rawName && (!canon.name || canon.name.startsWith('@') || canon.name.startsWith('UC'))) {
           canon.name = rawName;
@@ -415,11 +464,11 @@ const YTFolderStorage = (() => {
       }
 
       cleanFolders.push({
-        id: f.id || `folder_${Date.now()}_${cleanFolders.length}`,
-        name: f.name || `Folder ${cleanFolders.length + 1}`,
-        icon: f.icon || '📁',
-        color: f.color || '#2196f3',
-        description: f.description || '',
+        id: String(f.id || `folder_${Date.now()}_${cleanFolders.length}`).trim(),
+        name: String(f.name || `Folder ${cleanFolders.length + 1}`).trim(),
+        icon: sanitizeFolderIcon(f.icon),
+        color: sanitizeFolderColor(f.color),
+        description: String(f.description || '').trim(),
         channels: fChannels
       });
     }
@@ -1182,7 +1231,8 @@ const YTFolderStorage = (() => {
     });
 
     const currentSettings = await getSettings();
-    const settings = Object.assign({}, currentSettings, parsed.settings || {});
+    const safeIncomingSettings = sanitizeSettings(parsed.settings);
+    const settings = Object.assign({}, currentSettings, safeIncomingSettings);
 
     await setRaw({
       [STORAGE_KEYS.FOLDERS]: dedupResult.cleanFolders,

@@ -41,6 +41,15 @@
       .replace(/'/g, '&#39;');
   }
 
+  function sanitizeUrl(url) {
+    if (!url) return '#';
+    const trimmed = String(url).trim();
+    if (/^(?:javascript|data|vbscript):/i.test(trimmed)) {
+      return '#';
+    }
+    return escapeHtml(trimmed);
+  }
+
   // ---------------------------------------------------------------------------
   // Data Loading
   // ---------------------------------------------------------------------------
@@ -52,6 +61,7 @@
     activeFilterFolderId = cachedSettings.activeFeedFolderId || 'all';
   }
 
+  let toastTimer = null;
   function showToast(msg) {
     let toast = document.getElementById('yt-org-global-toast');
     if (!toast) {
@@ -62,7 +72,8 @@
     }
     toast.textContent = msg;
     toast.classList.add('show');
-    setTimeout(() => {
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
       toast.classList.remove('show');
     }, 2500);
   }
@@ -120,14 +131,14 @@
       const safeFolderName = escapeHtml(folder.name);
 
       html += `
-        <li class="yt-org-folder-item" data-folder-id="${folder.id}">
+        <li class="yt-org-folder-item" data-folder-id="${escapeHtml(folder.id)}">
           <div class="yt-org-folder-row ${isFilterActive ? 'yt-org-active' : ''}" title="${safeDesc}">
-            <span class="yt-org-folder-icon">${folder.icon || '📁'}</span>
+            <span class="yt-org-folder-icon">${escapeHtml(folder.icon || '📁')}</span>
             <span class="yt-org-folder-name">${safeFolderName}</span>
             <span class="yt-org-folder-badge">${channelCount}</span>
             <span class="yt-org-folder-chevron ${isExpanded ? 'expanded' : ''}">▶</span>
           </div>
-          <ul class="yt-org-channels-sublist ${isExpanded ? 'expanded' : ''}" id="yt-org-sublist-${folder.id}">
+          <ul class="yt-org-channels-sublist ${isExpanded ? 'expanded' : ''}" id="yt-org-sublist-${escapeHtml(folder.id)}">
       `;
 
       if (folder.channels && folder.channels.length > 0) {
@@ -139,8 +150,8 @@
           const safeChTooltip = escapeHtml(ch.name || ch.handle || '');
           html += `
             <li>
-              <a href="${link}" class="yt-org-channel-item" title="${safeChTooltip}">
-                <img class="yt-org-channel-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
+              <a href="${sanitizeUrl(link)}" class="yt-org-channel-item" title="${safeChTooltip}">
+                <img class="yt-org-channel-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
                 <span class="yt-org-channel-title">${safeChTitle}</span>
               </a>
             </li>
@@ -324,8 +335,8 @@
       const count = folder.channels ? folder.channels.length : 0;
       const isActive = activeFilterFolderId === folder.id;
       chipsHtml += `
-        <button class="yt-org-chip ${isActive ? 'active' : ''}" data-folder-id="${folder.id}">
-          <span>${folder.icon || '📁'}</span>
+        <button class="yt-org-chip ${isActive ? 'active' : ''}" data-folder-id="${escapeHtml(folder.id)}">
+          <span>${escapeHtml(folder.icon || '📁')}</span>
           <span>${escapeHtml(folder.name)}</span>
           <span class="yt-org-chip-badge">(${count})</span>
         </button>
@@ -407,13 +418,18 @@
     });
   }
 
+  let feedMutationDebounceTimer = null;
   function setupFeedObserver(gridContainer) {
     if (feedObserver) {
       feedObserver.disconnect();
     }
     const contentsEl = gridContainer.querySelector('#contents') || gridContainer.querySelector('#primary') || gridContainer;
     feedObserver = new MutationObserver(() => {
-      applyFeedFilters();
+      if (feedMutationDebounceTimer) return;
+      feedMutationDebounceTimer = setTimeout(() => {
+        feedMutationDebounceTimer = null;
+        applyFeedFilters();
+      }, 50);
     });
     feedObserver.observe(contentsEl, { childList: true, subtree: true });
   }
@@ -596,7 +612,7 @@
         }
       }
       emptyEl.innerHTML = `
-        <div>${folder?.icon || '📁'} <strong>「${folder?.name || ''}」</strong> 目前沒有符合條件的最新影片，或已全部觀看。</div>
+        <div>${escapeHtml(folder?.icon || '📁')} <strong>「${escapeHtml(folder?.name || '')}」</strong> 目前沒有符合條件的最新影片，或已全部觀看。</div>
         <button class="yt-org-empty-reset-btn" id="yt-org-empty-reset-btn">查看全部動態</button>
       `;
       const resetBtn = emptyEl.querySelector('#yt-org-empty-reset-btn');
@@ -750,8 +766,8 @@
           const safeFolderName = escapeHtml(folder.name);
           return `
             <label class="yt-org-dropdown-item">
-              <input type="checkbox" class="yt-org-floating-folder-checkbox" data-folder-id="${folder.id}" ${isChecked ? 'checked' : ''} />
-              <span>${folder.icon || '📁'}</span>
+              <input type="checkbox" class="yt-org-floating-folder-checkbox" data-folder-id="${escapeHtml(folder.id)}" ${isChecked ? 'checked' : ''} />
+              <span>${escapeHtml(folder.icon || '📁')}</span>
               <span class="yt-org-dropdown-item-name">${safeFolderName}</span>
             </label>
           `;
@@ -1277,6 +1293,9 @@
   }, true);
 
   // Monitor subscribe button state transitions on channel / watch pages
+  let lastMonitoredSubState = null;
+  let lastMonitoredChannelKey = null;
+
   async function monitorChannelSubscribeButtonState() {
     const pathname = window.location.pathname;
     const isChannelPage = pathname.startsWith('/@') || pathname.startsWith('/channel/');
@@ -1287,10 +1306,19 @@
     if (!channelInfo || (!channelInfo.id && !channelInfo.handle)) return;
 
     const subState = getPageSubscriptionState();
+    const channelKey = (channelInfo.id || channelInfo.handle).toLowerCase();
+
+    // Performance guard: Skip repeated redundant processing if channel and subscription state haven't changed
+    if (lastMonitoredSubState === subState && lastMonitoredChannelKey === channelKey) {
+      return;
+    }
+    lastMonitoredSubState = subState;
+    lastMonitoredChannelKey = channelKey;
+
     const taggerBtn = document.getElementById('yt-org-tagger-toggle-btn');
 
     if (subState === 'UNSUBSCRIBED') {
-      const memberFolderIds = await YTFolderStorage.getFoldersByChannel(channelInfo.id, channelInfo.handle);
+      const memberFolderIds = getCachedFolderIdsByChannel(channelInfo.id, channelInfo.handle);
       if (memberFolderIds.length > 0 || (taggerBtn && taggerBtn.classList.contains('has-folders'))) {
         const res = await YTFolderStorage.removeChannelFromAllFolders(channelInfo.id, channelInfo.handle, channelInfo.name);
         await loadData();
@@ -1314,6 +1342,8 @@
   // Master Lifecycle Handler
   // ---------------------------------------------------------------------------
   async function onPageUpdate() {
+    lastMonitoredSubState = null;
+    lastMonitoredChannelKey = null;
     if (globalFloatingDropdown && globalFloatingDropdown.classList.contains('show')) {
       globalFloatingDropdown.classList.remove('show');
     }

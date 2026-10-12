@@ -93,6 +93,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       .replace(/'/g, '&#39;');
   }
 
+  function sanitizeUrl(url) {
+    if (!url) return '#';
+    const trimmed = String(url).trim();
+    if (/^(?:javascript|data|vbscript):/i.test(trimmed)) {
+      return '#';
+    }
+    return escapeHtml(trimmed);
+  }
+
   let toastTimer = null;
   function showToast(msg, duration = 2500) {
     let toast = document.getElementById('opt-toast');
@@ -182,7 +191,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       item.className = `folder-item ${isActive ? 'active' : ''}`;
       item.innerHTML = `
         <div class="folder-item-left">
-          <span class="folder-item-icon">${folder.icon || '📁'}</span>
+          <span class="folder-item-icon">${escapeHtml(folder.icon || '📁')}</span>
           <div class="folder-item-details">
             <div class="folder-item-name">${escapeHtml(folder.name)}</div>
             <div class="folder-item-meta">${count} 個頻道</div>
@@ -307,12 +316,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const defaultAvatar = DEFAULT_AVATAR;
         const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
 
-        const folderOptions = allFolders.map(f => `<option value="${f.id}">${f.icon || '📁'} ${escapeHtml(f.name)}</option>`).join('');
+        const folderOptions = allFolders.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.icon || '📁')} ${escapeHtml(f.name)}</option>`).join('');
 
         card.innerHTML = `
-          <img class="channel-card-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
+          <img class="channel-card-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
           <div class="channel-card-info">
-            <a class="channel-card-title" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
+            <a class="channel-card-title" href="${sanitizeUrl(chUrl)}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
             <div class="channel-card-handle">${escapeHtml(ch.handle || ch.id)}</div>
           </div>
           <div class="channel-card-actions">
@@ -390,12 +399,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       const defaultAvatar = DEFAULT_AVATAR;
       const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
       const otherFolders = allFolders.filter(f => f.id !== folder.id);
-      const moveOptions = otherFolders.map(f => `<option value="${f.id}">📁 ${escapeHtml(f.name)}</option>`).join('');
+      const moveOptions = otherFolders.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.icon || '📁')} ${escapeHtml(f.name)}</option>`).join('');
 
       card.innerHTML = `
-        <img class="channel-card-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
+        <img class="channel-card-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
         <div class="channel-card-info">
-          <a class="channel-card-title" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
+          <a class="channel-card-title" href="${sanitizeUrl(chUrl)}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
           <div class="channel-card-handle">${escapeHtml(ch.handle || ch.id)}</div>
         </div>
         <div class="channel-card-actions" style="display: flex; align-items: center; gap: 6px;">
@@ -723,10 +732,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         row.innerHTML = `
           <input type="checkbox" class="unsub-channel-checkbox" id="cleanup-chk-${idx}" checked />
-          <img class="unsub-channel-avatar" src="${ch.avatarUrl || DEFAULT_AVATAR}" data-default-src="${DEFAULT_AVATAR}" alt="" />
+          <img class="unsub-channel-avatar" src="${escapeHtml(ch.avatarUrl || DEFAULT_AVATAR)}" data-default-src="${escapeHtml(DEFAULT_AVATAR)}" alt="" />
           <div class="unsub-channel-info">
             <div style="display: flex; align-items: center; justify-content: space-between;">
-              <a class="unsub-channel-name" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
+              <a class="unsub-channel-name" href="${sanitizeUrl(chUrl)}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
             </div>
             <div class="unsub-channel-handle">${escapeHtml(ch.handle || ch.id)}</div>
             <div style="margin-top: 4px;">${foldersBadges}</div>
@@ -958,9 +967,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         row.innerHTML = `
           <input type="checkbox" class="unsub-channel-checkbox" id="unsub-chk-${idx}" checked />
-          <img class="unsub-channel-avatar" src="${ch.avatarUrl || defaultAvatar}" data-default-src="${defaultAvatar}" alt="" />
+          <img class="unsub-channel-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
           <div class="unsub-channel-info">
-            <a class="unsub-channel-name" href="${chUrl}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
+            <a class="unsub-channel-name" href="${sanitizeUrl(chUrl)}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
             <div class="unsub-channel-handle">${escapeHtml(ch.handle ? ch.handle : (ch.id || ''))}</div>
           </div>
         `;
