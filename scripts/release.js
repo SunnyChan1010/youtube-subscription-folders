@@ -280,18 +280,34 @@ async function main() {
   if (releaseData && releaseData.id) {
     const zipName = `youtube-subscription-folders-${tagName}.zip`;
     const zipPath = path.join(rootDir, zipName);
-    if (!fs.existsSync(zipPath)) {
-      try {
-        const { execSync } = require('child_process');
-        execSync(`powershell -Command "Compress-Archive -Path manifest.json, scripts, styles, options, popup, icons, README.md -DestinationPath '${zipName}' -Force"`, { cwd: rootDir });
-        console.log(`📦 已自動建立擴充功能安裝包: ${zipName}`);
-      } catch (zipErr) {
-        console.warn(`⚠️ 建立 ZIP 套件失敗:`, zipErr.message);
-      }
+    try {
+      const { execSync } = require('child_process');
+      execSync(`powershell -Command "Compress-Archive -Path manifest.json, scripts, styles, options, popup, icons, README.md -DestinationPath '${zipName}' -Force"`, { cwd: rootDir });
+      console.log(`📦 已成功建立/刷新擴充功能安裝包: ${zipName}`);
+    } catch (zipErr) {
+      console.warn(`⚠️ 建立 ZIP 套件失敗:`, zipErr.message);
     }
 
     if (fs.existsSync(zipPath)) {
-      console.log(`🚀 正在上傳 Release 資產: ${zipName}...`);
+      // 檢查是否已有同名資產，若有則先刪除以確保更新
+      try {
+        const assetsRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/${releaseData.id}/assets`, { headers });
+        if (assetsRes.ok) {
+          const assets = await assetsRes.json();
+          const existingAsset = assets.find(a => a.name === zipName);
+          if (existingAsset) {
+            console.log(`🔄 偵測到舊版資產 (ID: ${existingAsset.id})，正在刪除以進行替換...`);
+            await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/assets/${existingAsset.id}`, {
+              method: 'DELETE',
+              headers
+            });
+          }
+        }
+      } catch (checkErr) {
+        console.warn(`⚠️ 檢查現有資產時發生錯誤:`, checkErr.message);
+      }
+
+      console.log(`🚀 正在上傳最新 Release 資產: ${zipName}...`);
       const zipBuffer = fs.readFileSync(zipPath);
       const uploadUrl = `https://uploads.github.com/repos/${owner}/${repo}/releases/${releaseData.id}/assets?name=${encodeURIComponent(zipName)}`;
       const uploadRes = await fetch(uploadUrl, {
@@ -305,14 +321,10 @@ async function main() {
       });
 
       if (uploadRes.ok) {
-        console.log(`🎉 成功上傳 Release 資產: ${zipName}`);
+        console.log(`🎉 成功上傳最新 Release 資產: ${zipName}`);
       } else {
         const upErr = await uploadRes.text();
-        if (upErr.includes('already_exists')) {
-          console.log(`ℹ️ 資產 ${zipName} 已存在於該 Release 中。`);
-        } else {
-          console.warn(`⚠️ 上傳 Release 資產失敗:`, upErr);
-        }
+        console.warn(`⚠️ 上傳 Release 資產失敗:`, upErr);
       }
     }
   }
