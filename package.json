@@ -6,6 +6,7 @@
   "scripts": {
     "lint:rules": "node scripts/audit_code_rules.js",
     "test": "node scripts/audit_code_rules.js && node test/test_unsubscribe.js && node test/test_audit_fixes.js && node test/test_cleanup_unsubscribed.js && node test/test_v110_features.js && node test/test_security_and_perf.js",
+    "install:hooks": "node scripts/install_hooks.js",
     "release": "node scripts/release.js"
   },
   "repository": {

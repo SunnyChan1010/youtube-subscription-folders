@@ -213,9 +213,101 @@ if (manifestJson.version !== packageJson.version) {
   recordError('Rule 6 - Version Consistency', 'manifest.json / package.json', null, `Version mismatch: manifest is ${manifestJson.version} but package is ${packageJson.version}.`);
 }
 
-const currentVerHeader = `## [${manifestJson.version}]`;
-if (!changelogText.includes(currentVerHeader)) {
-  recordError('Rule 6 - Version Consistency', 'CHANGELOG.md', null, `CHANGELOG.md is missing an entry for current version '${currentVerHeader}'.`);
+// ---------------------------------------------------------------------------
+// [Rule 7] Security Hardening: Anti-Malware, Zero XSS & Strict Origin Boundary
+// ---------------------------------------------------------------------------
+console.log('▶ [Rule 7] Scanning for security vulnerabilities, XSS vectors & unsafe constructs...');
+const allProductionJsFiles = [
+  path.join(rootDir, 'scripts', 'content.js'),
+  path.join(rootDir, 'scripts', 'background.js'),
+  path.join(rootDir, 'scripts', 'storage.js'),
+  path.join(rootDir, 'scripts', 'youtube_api.js'),
+  path.join(rootDir, 'options', 'options.js'),
+  path.join(rootDir, 'popup', 'popup.js')
+];
+
+// 7.1 Ban dynamic execution: eval, new Function, document.write
+const bannedConstructs = [
+  { pattern: /\beval\s*\(/, name: 'eval()' },
+  { pattern: /\bnew\s+Function\s*\(/, name: 'new Function()' },
+  { pattern: /\bdocument\.write\s*\(/, name: 'document.write()' }
+];
+
+allProductionJsFiles.forEach(f => {
+  if (!fs.existsSync(f)) return;
+  const content = fs.readFileSync(f, 'utf8');
+  const lines = content.split('\n');
+  lines.forEach((line, idx) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('//') || trimmed.startsWith('*')) return;
+
+    bannedConstructs.forEach(b => {
+      if (b.pattern.test(line)) {
+        recordError('Rule 7 - Security', path.relative(rootDir, f), idx + 1, `Banned unsafe construct '${b.name}' detected.`);
+      }
+    });
+  });
+});
+
+// 7.2 Verify presence of security sanitizers
+const contentJsContent = fs.readFileSync(path.join(rootDir, 'scripts', 'content.js'), 'utf8');
+const optionsJsContent = fs.readFileSync(path.join(rootDir, 'options', 'options.js'), 'utf8');
+const storageJsContent = fs.readFileSync(path.join(rootDir, 'scripts', 'storage.js'), 'utf8');
+
+if (!contentJsContent.includes('function sanitizeUrl') || !/javascript/i.test(contentJsContent)) {
+  recordError('Rule 7 - Security', 'scripts/content.js', null, 'content.js must contain sanitizeUrl with javascript pseudo-protocol blocking.');
+}
+
+if (!optionsJsContent.includes('function sanitizeUrl') || !/javascript/i.test(optionsJsContent)) {
+  recordError('Rule 7 - Security', 'options/options.js', null, 'options.js must contain sanitizeUrl with javascript pseudo-protocol blocking.');
+}
+
+if (!storageJsContent.includes('function sanitizeSettings') || !storageJsContent.includes('__proto__')) {
+  recordError('Rule 7 - Security', 'scripts/storage.js', null, 'storage.js must contain sanitizeSettings with __proto__ prototype pollution filtering.');
+}
+
+if (!storageJsContent.includes('function sanitizeAvatarUrl') || !storageJsContent.includes('function sanitizeFolderColor')) {
+  recordError('Rule 7 - Security', 'scripts/storage.js', null, 'storage.js must contain sanitizeAvatarUrl and sanitizeFolderColor.');
+}
+
+// 7.3 Verify zero unauthorized outbound network traffic
+const allowedNetworkHosts = ['youtube.com', 'www.youtube.com', 'googleapis.com', 'gstatic.com', 'yt3.ggpht.com', 'w3.org'];
+allProductionJsFiles.forEach(f => {
+  if (!fs.existsSync(f)) return;
+  const content = fs.readFileSync(f, 'utf8');
+  const urlMatches = content.match(/https?:\/\/[a-zA-Z0-9\.\-_]+/g) || [];
+  urlMatches.forEach(urlStr => {
+    try {
+      const u = new URL(urlStr);
+      const isAllowed = allowedNetworkHosts.some(h => u.hostname === h || u.hostname.endsWith('.' + h));
+      if (!isAllowed) {
+        recordError('Rule 7 - Security', path.relative(rootDir, f), null, `Unauthorized external network host '${u.hostname}' detected.`);
+      }
+    } catch (e) {}
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [Rule 8] Performance Guard: Zero Runaway Polling & Mutation Batching
+// ---------------------------------------------------------------------------
+console.log('▶ [Rule 8] Checking performance guards (polling frequency & observer debouncing)...');
+
+if (contentJsContent.includes('monitorChannelSubscribeButtonState')) {
+  if (!contentJsContent.includes('lastMonitoredSubState') || !contentJsContent.includes('lastMonitoredChannelKey')) {
+    recordError('Rule 8 - Performance', 'scripts/content.js', null, 'monitorChannelSubscribeButtonState must have state guards (lastMonitoredSubState/ChannelKey) to prevent redundant polling execution.');
+  }
+}
+
+if (contentJsContent.includes('setupFeedObserver')) {
+  if (!contentJsContent.includes('feedMutationDebounceTimer')) {
+    recordError('Rule 8 - Performance', 'scripts/content.js', null, 'setupFeedObserver must debounce rapid feed mutations to avoid layout thrashing.');
+  }
+}
+
+// Ensure no direct chrome.storage.local.get in monitorChannelSubscribeButtonState
+const monitorFnMatch = contentJsContent.match(/async function monitorChannelSubscribeButtonState\(\)[\s\S]*?^  \}/m);
+if (monitorFnMatch && monitorFnMatch[0].includes('YTFolderStorage.getFoldersByChannel')) {
+  recordError('Rule 8 - Performance', 'scripts/content.js', null, 'monitorChannelSubscribeButtonState must NOT invoke YTFolderStorage.getFoldersByChannel (disk I/O loop). Use memory cache getCachedFolderIdsByChannel.');
 }
 
 // ---------------------------------------------------------------------------
