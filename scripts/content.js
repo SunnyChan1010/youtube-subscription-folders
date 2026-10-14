@@ -102,9 +102,14 @@
     renderSidebarContent(existingSection);
   }
 
+  let suppressNextStorageSidebarRebuild = false;
+
   function renderSidebarContent(container) {
     const existingSearchInput = container.querySelector('#yt-org-sidebar-search-input');
     const prevSearchQuery = existingSearchInput ? existingSearchInput.value : '';
+    const existingList = container.querySelector('.yt-org-folder-list');
+    const prevListScrollTop = existingList ? existingList.scrollTop : 0;
+    const prevContainerScrollTop = container.scrollTop || 0;
 
     let html = `
       <div class="yt-org-sidebar-header" title="點擊展開/收合分組">
@@ -116,6 +121,10 @@
           <button class="yt-org-btn-icon" id="yt-org-btn-new-folder" title="新增分組">➕</button>
           <button class="yt-org-btn-icon" id="yt-org-btn-open-options" title="開啟管理設定">⚙️</button>
         </div>
+      </div>
+      <div class="yt-org-sidebar-new-folder-box" id="yt-org-sidebar-new-folder-box" style="display: none; padding: 6px 12px; gap: 6px; align-items: center;">
+        <input type="text" class="yt-org-sidebar-search-input" id="yt-org-sidebar-new-folder-input" placeholder="新分組名稱 (例如: 🎮 遊戲)..." maxlength="50" style="flex: 1;" />
+        <button class="yt-org-btn-icon" id="yt-org-sidebar-new-folder-submit" title="建立">✔️</button>
       </div>
       <div class="yt-org-sidebar-search-container">
         <input type="text" class="yt-org-sidebar-search-input" id="yt-org-sidebar-search-input" placeholder="🔍 搜尋分組或頻道..." value="${escapeHtml(prevSearchQuery)}" />
@@ -132,7 +141,7 @@
 
       html += `
         <li class="yt-org-folder-item" data-folder-id="${escapeHtml(folder.id)}">
-          <div class="yt-org-folder-row ${isFilterActive ? 'yt-org-active' : ''}" title="${safeDesc}">
+          <div class="yt-org-folder-row ${isFilterActive ? 'yt-org-active' : ''}" title="${safeDesc}（雙擊開啟訂閱內容並過濾此分組）">
             <span class="yt-org-folder-icon">${escapeHtml(folder.icon || '📁')}</span>
             <span class="yt-org-folder-name">${safeFolderName}</span>
             <span class="yt-org-folder-badge">${channelCount}</span>
@@ -171,6 +180,14 @@
 
     html += `</ul>`;
     container.innerHTML = html;
+
+    const newList = container.querySelector('.yt-org-folder-list');
+    if (newList && prevListScrollTop > 0) {
+      newList.scrollTop = prevListScrollTop;
+    }
+    if (prevContainerScrollTop > 0) {
+      container.scrollTop = prevContainerScrollTop;
+    }
 
     const searchInput = container.querySelector('#yt-org-sidebar-search-input');
     if (searchInput) {
@@ -228,15 +245,47 @@
     }
 
     const newFolderBtn = container.querySelector('#yt-org-btn-new-folder');
-    if (newFolderBtn) {
-      newFolderBtn.onclick = async (e) => {
+    const newFolderBox = container.querySelector('#yt-org-sidebar-new-folder-box');
+    const newFolderInput = container.querySelector('#yt-org-sidebar-new-folder-input');
+    const newFolderSubmit = container.querySelector('#yt-org-sidebar-new-folder-submit');
+
+    async function submitInlineNewFolder() {
+      const name = (newFolderInput?.value || '').trim();
+      if (!name) return;
+      try {
+        await YTFolderStorage.addFolder({ name });
+        if (newFolderInput) newFolderInput.value = '';
+        if (newFolderBox) newFolderBox.style.display = 'none';
+        showToast(`已建立分組「${name}」`);
+      } catch (err) {
+        showToast(err.message || '建立分組失敗');
+      }
+    }
+
+    if (newFolderBtn && newFolderBox && newFolderInput) {
+      newFolderBtn.onclick = (e) => {
         e.stopPropagation();
-        const name = prompt('請輸入新分組名稱 (例如: 🎮 遊戲實況):');
-        if (name && name.trim()) {
-          await YTFolderStorage.addFolder({ name: name.trim() });
-          showToast(`已建立分組「${name.trim()}」`);
+        const isHidden = newFolderBox.style.display === 'none';
+        newFolderBox.style.display = isHidden ? 'flex' : 'none';
+        if (isHidden) {
+          newFolderInput.focus();
         }
       };
+      newFolderInput.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          submitInlineNewFolder();
+        } else if (e.key === 'Escape') {
+          newFolderBox.style.display = 'none';
+        }
+      };
+      if (newFolderSubmit) {
+        newFolderSubmit.onclick = (e) => {
+          e.stopPropagation();
+          submitInlineNewFolder();
+        };
+      }
     }
 
     const optionsBtn = container.querySelector('#yt-org-btn-open-options');
@@ -252,26 +301,52 @@
       const folderId = folderItem?.dataset.folderId;
       const sublist = folderItem?.querySelector('.yt-org-channels-sublist');
       const chevron = row.querySelector('.yt-org-folder-chevron');
+      let singleClickTimer = null;
 
-      row.onclick = async () => {
+      async function toggleExpandState() {
         if (sublist && chevron) {
           const isExp = sublist.classList.toggle('expanded');
           chevron.classList.toggle('expanded', isExp);
           sublist.classList.toggle('user-expanded', isExp);
           if (!cachedSettings.expandedFolders) cachedSettings.expandedFolders = {};
           cachedSettings.expandedFolders[folderId] = isExp;
+          suppressNextStorageSidebarRebuild = true;
           await YTFolderStorage.updateSettings({ expandedFolders: cachedSettings.expandedFolders });
         }
+      }
+
+      row.onclick = (e) => {
+        if (e.target.closest('.yt-org-folder-chevron')) {
+          e.stopPropagation();
+          if (singleClickTimer) {
+            clearTimeout(singleClickTimer);
+            singleClickTimer = null;
+          }
+          toggleExpandState();
+          return;
+        }
+        if (singleClickTimer) clearTimeout(singleClickTimer);
+        singleClickTimer = setTimeout(() => {
+          singleClickTimer = null;
+          toggleExpandState();
+        }, 180);
       };
 
       row.ondblclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (singleClickTimer) {
+          clearTimeout(singleClickTimer);
+          singleClickTimer = null;
+        }
         activeFilterFolderId = folderId;
+        suppressNextStorageSidebarRebuild = true;
         YTFolderStorage.updateSettings({ activeFeedFolderId: folderId });
         if (!window.location.pathname.startsWith('/feed/subscriptions')) {
           window.location.href = `/feed/subscriptions`;
         } else {
+          container.querySelectorAll('.yt-org-folder-row').forEach(r => r.classList.remove('yt-org-active'));
+          row.classList.add('yt-org-active');
           updateFeedFilterChipsUI();
           applyFeedFilters();
         }
@@ -1385,6 +1460,10 @@
 
   let storageReloadDebounceTimer = null;
   async function syncFromStorageChange() {
+    if (suppressNextStorageSidebarRebuild) {
+      suppressNextStorageSidebarRebuild = false;
+      return;
+    }
     if (storageReloadDebounceTimer) clearTimeout(storageReloadDebounceTimer);
     storageReloadDebounceTimer = setTimeout(async () => {
       storageReloadDebounceTimer = null;
@@ -1399,14 +1478,14 @@
         const channelInfo = isChannelPage ? extractCurrentChannelInfo() : extractWatchPageChannelInfo();
         if (channelInfo) updateTaggerButtonAppearance(existingBtn, channelInfo);
       }
-    }, 80);
+    }, 120);
   }
 
   window.addEventListener('yt-folders-storage-updated', syncFromStorageChange);
 
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName === 'local' && (changes.yt_folders_v1 || changes.yt_channels_v1 || changes.yt_settings_v1)) {
+      if (areaName === 'local' && (changes.yt_folders || changes.yt_channels || changes.yt_settings)) {
         syncFromStorageChange();
       }
     });
@@ -1435,6 +1514,8 @@
       let apiKey = '';
       let clientVersion = '';
       let visitorData = '';
+      let sessionIndex = '0';
+      let delegatedSessionId = '';
       const scripts = document.querySelectorAll('script');
       for (const s of scripts) {
         const txt = s.textContent || '';
@@ -1445,10 +1526,14 @@
           if (vMatch) clientVersion = vMatch[1];
           const visMatch = txt.match(/"VISITOR_DATA":"([^"]+)"/);
           if (visMatch) visitorData = visMatch[1];
+          const idxMatch = txt.match(/"SESSION_INDEX":"(\d+)"/);
+          if (idxMatch) sessionIndex = idxMatch[1];
+          const pageIdMatch = txt.match(/"DELEGATED_SESSION_ID":"([^"]+)"/);
+          if (pageIdMatch) delegatedSessionId = pageIdMatch[1];
           break;
         }
       }
-      sendResponse({ apiKey, clientVersion, visitorData });
+      sendResponse({ apiKey, clientVersion, visitorData, sessionIndex, delegatedSessionId });
       return false;
     }
     if (msg.action === 'EXEC_SUBSCRIBE') {
@@ -1465,7 +1550,9 @@
     if (msg.action === 'EXEC_UNSUBSCRIBE') {
       (async () => {
         try {
-          const res = await YTSubscriptionService.executeUnsubscribeDirect(msg.channelId, msg.params);
+          const res = await YTSubscriptionService.executeUnsubscribeDirect(msg.channelId, msg.params, {
+            skipStorageSync: Boolean(msg.skipStorageSync)
+          });
           sendResponse(res);
         } catch (err) {
           sendResponse({ success: false, error: err.message, channelId: msg.channelId });

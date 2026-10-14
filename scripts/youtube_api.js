@@ -8,6 +8,26 @@ const YTSubscriptionService = (() => {
   let cachedSession = null;
   let cachedSubscribedChannels = null;
   let lastSubscribedFetchTime = 0;
+  const resolvedChannelCache = new Map();
+
+  function clearSessionCache() {
+    cachedSession = null;
+  }
+
+  /**
+   * Wrapper around fetch() with mandatory AbortController timeout protection.
+   */
+  async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort(new Error(`REQUEST_TIMEOUT_${timeoutMs}MS`));
+    }, timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   /**
    * Detects if code is currently executing directly within a YouTube page context.
@@ -112,7 +132,7 @@ const YTSubscriptionService = (() => {
   }
 
   /**
-   * Obtains active YouTube InnerTube session credentials (API key, client context, SAPISID)
+   * Obtains active YouTube InnerTube session credentials (API key, client context, SAPISID, multi-account AuthUser & PageId)
    */
   async function getAuthSession(forceRefresh = false) {
     if (!forceRefresh && cachedSession && (Date.now() - cachedSession.time < 300000)) {
@@ -123,16 +143,11 @@ const YTSubscriptionService = (() => {
     let apiKey = '';
     let clientVersion = '2.20260101.00.00';
     let visitorData = '';
-
-    // Strategy 0: Direct page context with window.ytcfg
-    if (typeof window !== 'undefined' && window.ytcfg && typeof window.ytcfg.get === 'function') {
-      if (!apiKey) apiKey = window.ytcfg.get('INNERTUBE_API_KEY');
-      if (!clientVersion) clientVersion = window.ytcfg.get('INNERTUBE_CLIENT_VERSION');
-      if (!visitorData) visitorData = window.ytcfg.get('VISITOR_DATA');
-    }
+    let sessionIndex = '0';
+    let delegatedSessionId = '';
 
     // Strategy 1: Extract from DOM scripts if running in document context
-    if (typeof document !== 'undefined' && (!apiKey || !clientVersion)) {
+    if (typeof document !== 'undefined') {
       try {
         const scripts = document.querySelectorAll('script');
         for (const s of scripts) {
@@ -141,9 +156,13 @@ const YTSubscriptionService = (() => {
             const kMatch = txt.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
             if (kMatch && !apiKey) apiKey = kMatch[1];
             const vMatch = txt.match(/"INNERTUBE_CLIENT_VERSION":"([^"]+)"/) || txt.match(/"clientVersion":"([^"]+)"/);
-            if (vMatch && (!clientVersion || clientVersion.startsWith('2.20250101'))) clientVersion = vMatch[1];
+            if (vMatch) clientVersion = vMatch[1];
             const visMatch = txt.match(/"VISITOR_DATA":"([^"]+)"/);
             if (visMatch && !visitorData) visitorData = visMatch[1];
+            const idxMatch = txt.match(/"SESSION_INDEX":"(\d+)"/);
+            if (idxMatch) sessionIndex = idxMatch[1];
+            const pageIdMatch = txt.match(/"DELEGATED_SESSION_ID":"([^"]+)"/);
+            if (pageIdMatch) delegatedSessionId = pageIdMatch[1];
             break;
           }
         }
@@ -158,7 +177,9 @@ const YTSubscriptionService = (() => {
           if (tab.id) {
             try {
               const res = await new Promise((resolve) => {
+                const timer = setTimeout(() => resolve(null), 4000);
                 chrome.tabs.sendMessage(tab.id, { action: 'GET_YT_CONFIG' }, (r) => {
+                  clearTimeout(timer);
                   if (chrome.runtime.lastError) resolve(null);
                   else resolve(r);
                 });
@@ -167,6 +188,8 @@ const YTSubscriptionService = (() => {
                 apiKey = res.apiKey;
                 if (res.clientVersion) clientVersion = res.clientVersion;
                 if (res.visitorData) visitorData = res.visitorData;
+                if (res.sessionIndex) sessionIndex = String(res.sessionIndex);
+                if (res.delegatedSessionId) delegatedSessionId = String(res.delegatedSessionId);
                 break;
               }
             } catch (e) {}
@@ -178,10 +201,10 @@ const YTSubscriptionService = (() => {
     // Strategy 3: Fetch YouTube homepage HTML to extract INNERTUBE_API_KEY if not yet found
     if (!apiKey) {
       try {
-        const resp = await fetch('https://www.youtube.com/', {
+        const resp = await fetchWithTimeout('https://www.youtube.com/', {
           credentials: 'include',
           headers: { 'Accept': 'text/html' }
-        });
+        }, 10000);
         if (resp.ok) {
           const html = await resp.text();
           const keyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
@@ -193,6 +216,12 @@ const YTSubscriptionService = (() => {
 
           const visMatch = html.match(/"VISITOR_DATA":"([^"]+)"/);
           if (visMatch) visitorData = visMatch[1];
+
+          const idxMatch = html.match(/"SESSION_INDEX":"(\d+)"/);
+          if (idxMatch) sessionIndex = idxMatch[1];
+
+          const pageIdMatch = html.match(/"DELEGATED_SESSION_ID":"([^"]+)"/);
+          if (pageIdMatch) delegatedSessionId = pageIdMatch[1];
         }
       } catch (err) {
         console.warn('[YTSubscriptionService] Error scraping YouTube config:', err);
@@ -208,6 +237,8 @@ const YTSubscriptionService = (() => {
       apiKey,
       clientVersion,
       visitorData,
+      sessionIndex: sessionIndex || '0',
+      delegatedSessionId: delegatedSessionId || '',
       isLoggedIn: Boolean(sapisid),
       time: Date.now()
     };
@@ -265,10 +296,60 @@ const YTSubscriptionService = (() => {
 
   /**
    * Resolves channel handle or URL to full channel details (canonical ID, display name, avatar)
+   * Prioritizes in-memory cache and local storage registry before scraping YouTube HTML.
    */
   async function resolveChannelDetails(handleOrId) {
     if (!handleOrId) return null;
     const clean = String(handleOrId).trim();
+    const cacheKey = clean.toLowerCase();
+    const normHandleKey = cacheKey.replace(/^@/, '');
+
+    // 1. Check in-memory resolution cache
+    const cached = resolvedChannelCache.get(cacheKey) || (normHandleKey ? resolvedChannelCache.get(normHandleKey) : null);
+    if (cached && /^UC[a-zA-Z0-9_-]{22}$/.test(cached.id)) {
+      return cached;
+    }
+
+    // 2. Check cached live subscribed channels in memory
+    if (cachedSubscribedChannels && Array.isArray(cachedSubscribedChannels.channelsList)) {
+      const matchedLive = cachedSubscribedChannels.channelsList.find(c => {
+        if (!c) return false;
+        const cId = (c.id || '').toLowerCase();
+        const cH = (c.handle || '').toLowerCase().replace(/^@/, '');
+        return (cId === cacheKey || (normHandleKey && cH === normHandleKey)) && /^UC[a-zA-Z0-9_-]{22}$/.test(c.id || '');
+      });
+      if (matchedLive) {
+        resolvedChannelCache.set(cacheKey, matchedLive);
+        if (normHandleKey) resolvedChannelCache.set(normHandleKey, matchedLive);
+        return matchedLive;
+      }
+    }
+
+    // 3. Check local YTFolderStorage channels dictionary to avoid 2MB HTML fetch
+    const storage = getStorageInstance();
+    if (storage && typeof storage.getChannels === 'function') {
+      try {
+        const localChannels = await storage.getChannels();
+        if (localChannels && typeof localChannels === 'object') {
+          const direct = localChannels[clean] || localChannels[cacheKey] || localChannels[`@${normHandleKey}`];
+          if (direct && /^UC[a-zA-Z0-9_-]{22}$/.test(direct.id || '')) {
+            resolvedChannelCache.set(cacheKey, direct);
+            if (normHandleKey) resolvedChannelCache.set(normHandleKey, direct);
+            return direct;
+          }
+          for (const ch of Object.values(localChannels)) {
+            if (!ch || !/^UC[a-zA-Z0-9_-]{22}$/.test(ch.id || '')) continue;
+            const chIdLower = ch.id.toLowerCase();
+            const chHandleNorm = (ch.handle || '').toLowerCase().replace(/^@/, '');
+            if (chIdLower === cacheKey || (normHandleKey && chHandleNorm === normHandleKey)) {
+              resolvedChannelCache.set(cacheKey, ch);
+              if (normHandleKey) resolvedChannelCache.set(normHandleKey, ch);
+              return ch;
+            }
+          }
+        }
+      } catch (e) {}
+    }
 
     let canonicalId = /^UC[a-zA-Z0-9_-]{22}$/.test(clean) ? clean : '';
     let handle = clean.startsWith('@') ? clean : '';
@@ -281,10 +362,10 @@ const YTSubscriptionService = (() => {
     }
 
     try {
-      const resp = await fetch(url, {
+      const resp = await fetchWithTimeout(url, {
         credentials: 'include',
         headers: { 'Accept': 'text/html' }
-      });
+      }, 10000);
       if (resp.ok) {
         const html = await resp.text();
 
@@ -323,12 +404,20 @@ const YTSubscriptionService = (() => {
       console.warn('[YTSubscriptionService] Error resolving channel details for:', clean, err);
     }
 
-    return {
+    const result = {
       id: canonicalId || clean,
       name: name || handle || canonicalId || clean,
       handle: handle || (clean.startsWith('@') ? clean : ''),
       avatarUrl: avatarUrl || ''
     };
+
+    if (/^UC[a-zA-Z0-9_-]{22}$/.test(result.id)) {
+      resolvedChannelCache.set(cacheKey, result);
+      if (normHandleKey) resolvedChannelCache.set(normHandleKey, result);
+      resolvedChannelCache.set(result.id.toLowerCase(), result);
+    }
+
+    return result;
   }
 
   /**
@@ -589,21 +678,13 @@ const YTSubscriptionService = (() => {
     }
   }
 
-  /**
-   * Executes subscribe mutation directly in YouTube page context
-   */
-  async function executeSubscribeDirect(canonicalId, params = 'EgIIAhgA') {
-    const session = await getAuthSession();
-    if (!session.sapisid) {
-      return { success: false, error: 'NOT_LOGGED_IN', channelId: canonicalId };
-    }
-
-    const authHeader = await getSapisidHash(session.sapisid, 'https://www.youtube.com');
+  function buildInnerTubeHeaders(session, authHeader) {
     const headers = {
       'Content-Type': 'application/json',
       'X-Origin': 'https://www.youtube.com',
       'X-YouTube-Client-Name': '1',
-      'X-YouTube-Client-Version': session.clientVersion
+      'X-YouTube-Client-Version': session.clientVersion,
+      'X-Goog-AuthUser': session.sessionIndex || '0'
     };
     if (authHeader) {
       headers['Authorization'] = authHeader;
@@ -611,6 +692,23 @@ const YTSubscriptionService = (() => {
     if (session.visitorData) {
       headers['X-Goog-Visitor-Id'] = session.visitorData;
     }
+    if (session.delegatedSessionId) {
+      headers['X-Goog-PageId'] = session.delegatedSessionId;
+    }
+    return headers;
+  }
+
+  /**
+   * Executes subscribe mutation directly in YouTube page context
+   */
+  async function executeSubscribeDirect(canonicalId, params = 'EgIIAhgA', _isRetry = false) {
+    const session = await getAuthSession(_isRetry);
+    if (!session.sapisid) {
+      return { success: false, error: 'NOT_LOGGED_IN', channelId: canonicalId };
+    }
+
+    const authHeader = await getSapisidHash(session.sapisid, 'https://www.youtube.com');
+    const headers = buildInnerTubeHeaders(session, authHeader);
 
     const payload = {
       context: {
@@ -628,12 +726,17 @@ const YTSubscriptionService = (() => {
       : `https://www.youtube.com/youtubei/v1/subscription/subscribe?key=${session.apiKey}`;
 
     try {
-      const resp = await fetch(fetchUrl, {
+      const resp = await fetchWithTimeout(fetchUrl, {
         method: 'POST',
         headers,
         credentials: 'include',
         body: JSON.stringify(payload)
-      });
+      }, 12000);
+
+      if ((resp.status === 401 || resp.status === 403) && !_isRetry) {
+        clearSessionCache();
+        return await executeSubscribeDirect(canonicalId, params, true);
+      }
 
       const json = await resp.json().catch(() => ({}));
       const verified = verifySubscriptionResult(json, true);
@@ -654,6 +757,10 @@ const YTSubscriptionService = (() => {
         }
         return { success: true, channelId: canonicalId, data: json };
       } else {
+        if (verified.error === 'SESSION_EXPIRED' && !_isRetry) {
+          clearSessionCache();
+          return await executeSubscribeDirect(canonicalId, params, true);
+        }
         return { success: false, error: verified.error, channelId: canonicalId, details: verified.details };
       }
     } catch (err) {
@@ -664,25 +771,14 @@ const YTSubscriptionService = (() => {
   /**
    * Executes unsubscribe mutation directly in YouTube page context
    */
-  async function executeUnsubscribeDirect(canonicalId, params = 'CgIIAhgA') {
-    const session = await getAuthSession();
+  async function executeUnsubscribeDirect(canonicalId, params = 'CgIIAhgA', { skipStorageSync = false, _isRetry = false } = {}) {
+    const session = await getAuthSession(_isRetry);
     if (!session.sapisid) {
       return { success: false, error: 'NOT_LOGGED_IN', channelId: canonicalId };
     }
 
     const authHeader = await getSapisidHash(session.sapisid, 'https://www.youtube.com');
-    const headers = {
-      'Content-Type': 'application/json',
-      'X-Origin': 'https://www.youtube.com',
-      'X-YouTube-Client-Name': '1',
-      'X-YouTube-Client-Version': session.clientVersion
-    };
-    if (authHeader) {
-      headers['Authorization'] = authHeader;
-    }
-    if (session.visitorData) {
-      headers['X-Goog-Visitor-Id'] = session.visitorData;
-    }
+    const headers = buildInnerTubeHeaders(session, authHeader);
 
     const payload = {
       context: {
@@ -700,12 +796,17 @@ const YTSubscriptionService = (() => {
       : `https://www.youtube.com/youtubei/v1/subscription/unsubscribe?key=${session.apiKey}`;
 
     try {
-      const resp = await fetch(fetchUrl, {
+      const resp = await fetchWithTimeout(fetchUrl, {
         method: 'POST',
         headers,
         credentials: 'include',
         body: JSON.stringify(payload)
-      });
+      }, 12000);
+
+      if ((resp.status === 401 || resp.status === 403) && !_isRetry) {
+        clearSessionCache();
+        return await executeUnsubscribeDirect(canonicalId, params, { skipStorageSync, _isRetry: true });
+      }
 
       const json = await resp.json().catch(() => ({}));
       const verified = verifySubscriptionResult(json, false);
@@ -719,14 +820,20 @@ const YTSubscriptionService = (() => {
             cachedSubscribedChannels.channelsList = cachedSubscribedChannels.channelsList.filter(c => c.id !== canonicalId);
           }
         }
-        const storage = getStorageInstance();
-        if (storage && storage.removeChannelFromAllFolders) {
-          try {
-            await storage.removeChannelFromAllFolders(canonicalId);
-          } catch (e) {}
+        if (!skipStorageSync) {
+          const storage = getStorageInstance();
+          if (storage && storage.removeChannelFromAllFolders) {
+            try {
+              await storage.removeChannelFromAllFolders(canonicalId);
+            } catch (e) {}
+          }
         }
         return { success: true, channelId: canonicalId, data: json };
       } else {
+        if (verified.error === 'SESSION_EXPIRED' && !_isRetry) {
+          clearSessionCache();
+          return await executeUnsubscribeDirect(canonicalId, params, { skipStorageSync, _isRetry: true });
+        }
         return { success: false, error: verified.error, channelId: canonicalId, details: verified.details };
       }
     } catch (err) {
@@ -737,12 +844,12 @@ const YTSubscriptionService = (() => {
   /**
    * Executes fetch subscribed channels directly in YouTube page context
    */
-  async function executeFetchSubscribedChannelsDirect(forceRefresh = false) {
+  async function executeFetchSubscribedChannelsDirect(forceRefresh = false, _isRetry = false) {
     if (!forceRefresh && cachedSubscribedChannels && (Date.now() - lastSubscribedFetchTime < 180000)) {
       return cachedSubscribedChannels;
     }
 
-    const session = await getAuthSession(forceRefresh);
+    const session = await getAuthSession(forceRefresh || _isRetry);
     const channelIds = new Set();
     const handles = new Set();
     const channelsMap = new Map();
@@ -759,18 +866,7 @@ const YTSubscriptionService = (() => {
 
     try {
       const authHeader = await getSapisidHash(session.sapisid, 'https://www.youtube.com');
-      const headers = {
-        'Content-Type': 'application/json',
-        'X-Origin': 'https://www.youtube.com',
-        'X-YouTube-Client-Name': '1',
-        'X-YouTube-Client-Version': session.clientVersion
-      };
-      if (authHeader) {
-        headers['Authorization'] = authHeader;
-      }
-      if (session.visitorData) {
-        headers['X-Goog-Visitor-Id'] = session.visitorData;
-      }
+      const headers = buildInnerTubeHeaders(session, authHeader);
 
       const payload = {
         context: {
@@ -790,12 +886,17 @@ const YTSubscriptionService = (() => {
         ? `/youtubei/v1/browse?key=${session.apiKey}`
         : `https://www.youtube.com/youtubei/v1/browse?key=${session.apiKey}`;
 
-      const resp = await fetch(fetchUrl, {
+      const resp = await fetchWithTimeout(fetchUrl, {
         method: 'POST',
         headers,
         credentials: 'include',
         body: JSON.stringify(payload)
-      });
+      }, 15000);
+
+      if ((resp.status === 401 || resp.status === 403) && !_isRetry) {
+        clearSessionCache();
+        return await executeFetchSubscribedChannelsDirect(true, true);
+      }
 
       if (resp.ok) {
         const json = await resp.json();
@@ -822,12 +923,12 @@ const YTSubscriptionService = (() => {
           };
 
           try {
-            const contResp = await fetch(fetchUrl, {
+            const contResp = await fetchWithTimeout(fetchUrl, {
               method: 'POST',
               headers,
               credentials: 'include',
               body: JSON.stringify(contPayload)
-            });
+            }, 12000);
 
             if (!contResp.ok) break;
 
@@ -846,10 +947,22 @@ const YTSubscriptionService = (() => {
       console.error('[YTSubscriptionService] Error fetching subscriptions:', err);
     }
 
+    const channelsList = Array.from(channelsMap.values());
+    for (const ch of channelsList) {
+      if (ch && /^UC[a-zA-Z0-9_-]{22}$/.test(ch.id || '')) {
+        resolvedChannelCache.set(ch.id.toLowerCase(), ch);
+        if (ch.handle) {
+          const hLower = ch.handle.toLowerCase();
+          resolvedChannelCache.set(hLower, ch);
+          resolvedChannelCache.set(hLower.replace(/^@/, ''), ch);
+        }
+      }
+    }
+
     cachedSubscribedChannels = {
       channelIds,
       handles,
-      channelsList: Array.from(channelsMap.values()),
+      channelsList,
       isLoggedIn: true
     };
     lastSubscribedFetchTime = Date.now();
@@ -869,12 +982,12 @@ const YTSubscriptionService = (() => {
       return await executeFetchSubscribedChannelsDirect(forceRefresh);
     }
 
-    // In extension context: try delegating to YouTube tab
+    // In extension context: try delegating to YouTube tab (60s timeout to accommodate up to 35 continuation pages)
     let tabContext = await acquireExecutionTab();
     if (tabContext && tabContext.tabId) {
       try {
         const res = await new Promise((resolve) => {
-          const timeout = setTimeout(() => resolve(null), 15000);
+          const timeout = setTimeout(() => resolve(null), 60000);
           try {
             chrome.tabs.sendMessage(tabContext.tabId, {
               action: 'EXEC_FETCH_SUBSCRIBED_CHANNELS',
@@ -893,10 +1006,21 @@ const YTSubscriptionService = (() => {
         if (res && res.success) {
           const channelIds = new Set(res.channelIds || []);
           const handles = new Set(res.handles || []);
+          const channelsList = res.channelsList || [];
+          for (const ch of channelsList) {
+            if (ch && /^UC[a-zA-Z0-9_-]{22}$/.test(ch.id || '')) {
+              resolvedChannelCache.set(ch.id.toLowerCase(), ch);
+              if (ch.handle) {
+                const hLower = ch.handle.toLowerCase();
+                resolvedChannelCache.set(hLower, ch);
+                resolvedChannelCache.set(hLower.replace(/^@/, ''), ch);
+              }
+            }
+          }
           cachedSubscribedChannels = {
             channelIds,
             handles,
-            channelsList: res.channelsList || [],
+            channelsList,
             isLoggedIn: res.isLoggedIn !== false
           };
           lastSubscribedFetchTime = Date.now();
@@ -907,7 +1031,7 @@ const YTSubscriptionService = (() => {
       }
     }
 
-    // Fallback direct execution
+    // Fallback direct execution only if tab delegation was unavailable
     return await executeFetchSubscribedChannelsDirect(forceRefresh);
   }
 
@@ -984,7 +1108,7 @@ const YTSubscriptionService = (() => {
   /**
    * Unsubscribes from a single channel on YouTube
    */
-  async function unsubscribeChannel(channelIdOrHandle, { preferredTabId = null } = {}) {
+  async function unsubscribeChannel(channelIdOrHandle, { preferredTabId = null, skipStorageSync = false } = {}) {
     if (!channelIdOrHandle) {
       return { success: false, error: 'MISSING_CHANNEL_ID' };
     }
@@ -996,7 +1120,7 @@ const YTSubscriptionService = (() => {
 
     // 1. Direct page context execution
     if (isYouTubePageContext()) {
-      return await executeUnsubscribeDirect(canonicalId, 'CgIIAhgA');
+      return await executeUnsubscribeDirect(canonicalId, 'CgIIAhgA', { skipStorageSync });
     }
 
     // 2. Running in extension context: delegate to YouTube tab
@@ -1018,7 +1142,8 @@ const YTSubscriptionService = (() => {
             chrome.tabs.sendMessage(targetTabId, {
               action: 'EXEC_UNSUBSCRIBE',
               channelId: canonicalId,
-              params: 'CgIIAhgA'
+              params: 'CgIIAhgA',
+              skipStorageSync: true // Handle storage removal once in caller or batch
             }, (res) => {
               clearTimeout(timeout);
               if (chrome.runtime.lastError) {
@@ -1037,11 +1162,13 @@ const YTSubscriptionService = (() => {
           if (cachedSubscribedChannels && cachedSubscribedChannels.channelIds) {
             cachedSubscribedChannels.channelIds.delete(canonicalId);
           }
-          const storage = getStorageInstance();
-          if (storage && storage.removeChannelFromAllFolders) {
-            try {
-              await storage.removeChannelFromAllFolders(canonicalId, channelIdOrHandle);
-            } catch (e) {}
+          if (!skipStorageSync) {
+            const storage = getStorageInstance();
+            if (storage && storage.removeChannelFromAllFolders) {
+              try {
+                await storage.removeChannelFromAllFolders(canonicalId, channelIdOrHandle);
+              } catch (e) {}
+            }
           }
         }
 
@@ -1054,7 +1181,7 @@ const YTSubscriptionService = (() => {
     }
 
     // 3. Fallback direct execution if no tab available
-    return await executeUnsubscribeDirect(canonicalId, 'CgIIAhgA');
+    return await executeUnsubscribeDirect(canonicalId, 'CgIIAhgA', { skipStorageSync });
   }
 
   /**
@@ -1217,13 +1344,16 @@ const YTSubscriptionService = (() => {
   /**
    * Batch unsubscribes from multiple channels with safety delay and progress callbacks.
    * Acquires a single execution tab for the entire batch to maximize efficiency.
+   * Coalesces storage updates into a single atomic batch write after completion.
    */
   async function batchUnsubscribeWithProgress(channels, {
     delayMs = 500,
     onProgress = null,
-    shouldAbort = null
+    shouldAbort = null,
+    skipStorageSync = false
   } = {}) {
     const results = [];
+    const succeededChannels = [];
     let succeeded = 0;
     let failed = 0;
 
@@ -1253,10 +1383,14 @@ const YTSubscriptionService = (() => {
           });
         }
 
-        const res = await unsubscribeChannel(target, { preferredTabId });
+        const res = await unsubscribeChannel(target, { preferredTabId, skipStorageSync: true });
 
         if (res.success) {
           succeeded++;
+          succeededChannels.push({
+            ...ch,
+            id: res.channelId || ch.id || target
+          });
         } else {
           failed++;
         }
@@ -1287,6 +1421,15 @@ const YTSubscriptionService = (() => {
       }
     }
 
+    if (!skipStorageSync && succeededChannels.length > 0) {
+      const storage = getStorageInstance();
+      if (storage && typeof storage.batchRemoveUnsubscribedChannels === 'function') {
+        try {
+          await storage.batchRemoveUnsubscribedChannels(succeededChannels, { purgeFromStorage: false });
+        } catch (e) {}
+      }
+    }
+
     return {
       total: channels.length,
       succeeded,
@@ -1301,6 +1444,7 @@ const YTSubscriptionService = (() => {
     getSapisidHash,
     getSapisidCookie,
     getAuthSession,
+    clearSessionCache,
     buildSafeYouTubeChannelUrl,
     resolveChannelId,
     resolveChannelDetails,

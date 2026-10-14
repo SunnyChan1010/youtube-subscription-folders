@@ -4,6 +4,28 @@
 
 ---
 
+## [1.2.0] - 2026-10-14
+
+### 🛡️ 架構重構與穩定性防線 (Architectural Resilience)
+- **修復跨頁狀態失聯（`chrome.storage.onChanged` 鍵名對齊）**：
+  - 修正 `content.js` 與 `options.js` 中對錯誤鍵名（`_v1` 後綴）的檢查，精確對齊 `storage.js` 的 `yt_folders`、`yt_channels`、`yt_settings`，並引入 120ms~150ms 防抖，徹底消除跨分頁編輯導致的陳舊快照覆蓋（Lost Update）。
+- **側邊欄單雙擊 DOM 衝突修復與捲動位置保留**：
+  - 在 `renderSidebarContent()` 前後自動記錄並還原 `scrollTop`，切換分組時不再彈回頂部。
+  - 分離箭頭展開（0ms）與資料夾點擊，加入 180ms 單雙擊區分計時器與 `suppressNextStorageSidebarRebuild` 旗標，雙擊跳轉 `/feed/subscriptions` 時穩定合成原生事件，不再因 `updateSettings` 寫入導致節點銷毀重建。
+  - 拔除側邊欄阻塞式 `window.prompt()`，改為優雅的非阻塞行內快速輸入框（`#yt-org-sidebar-new-folder-box`，支援 `Enter` 建立與 `Escape` 取消）。
+- **消除批次訂閱/退訂之 N+1 儲存寫入雪崩**：
+  - 於批次退訂與自動訂閱期間停用逐筆 Storage 寫入，批次完成後一次性原子呼叫 `batchRemoveUnsubscribedChannels` / `batchUpdateChannels`，將原先 50 筆操作的 150 次磁碟寫入與廣播壓縮為嚴格的 **1 次**。
+- **網路請求超時防線與重度用戶分頁同步保護**：
+  - 為 `youtube_api.js` 所有 6 處 `fetch` 加上統一的 `fetchWithTimeout()`（`AbortController` 超時防禦），防止網路掛起造成無限轉圈。
+  - 將分頁委託同步超時從 15 秒調升至 **60 秒**，徹底杜絕 >800 頻道的重度用戶在 15 秒時觸發的雙倍請求風暴。
+- **多帳號與品牌頻道（Brand Account）認證支援**：
+  - 於 `getAuthSession` 與 `content.js` 動態提取 `SESSION_INDEX` (`X-Goog-AuthUser`) 與 `DELEGATED_SESSION_ID` (`X-Goog-PageId`)，並在 InnerTube API 遭遇 401/403 時自動清理快取自癒重試 1 次。
+- **@handle 本地雙層快取與消除殘留 $O(F \times C^2)$ 線性掃描**：
+  - `resolveChannelDetails` 優先查詢記憶體快取與本地 `YTFolderStorage.getChannels()`，已存在的 Handle 享 **0 網路請求** 即時解析，省去 90%+ 的 2MB 網頁 HTML 下載。
+  - `handleCheckUnsubscribedChannels` 預先建立 `channelByToken` `Map` 索引，降至 $O(F + C)$。
+
+---
+
 ## [1.1.1] - 2026-10-14
 
 ### 🛡️ 安全性強化 (Security)

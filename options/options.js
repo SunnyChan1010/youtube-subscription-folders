@@ -830,10 +830,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    // 2. Scan all channels across folders and uncategorized
+    // 2. Scan all channels across folders and uncategorized using O(1) Map lookup
     const folders = await YTFolderStorage.getFolders();
     const channels = await YTFolderStorage.getChannels();
     const uncategorized = await YTFolderStorage.getUncategorizedChannels();
+
+    const channelByToken = new Map();
+    for (const [k, c] of Object.entries(channels || {})) {
+      if (!c) continue;
+      channelByToken.set(k.toLowerCase(), c);
+      if (c.id) channelByToken.set(String(c.id).toLowerCase(), c);
+      if (c.handle) {
+        const nh = normalizeHandle(c.handle);
+        if (nh) channelByToken.set(nh, c);
+      }
+    }
 
     const channelMap = new Map(); // id/key -> { ch, folders: [folderName...] }
 
@@ -841,12 +852,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (Array.isArray(f.channels)) {
         f.channels.forEach(chRef => {
           if (!chRef) return;
-          const chObj = channels[chRef] || Object.values(channels).find(c =>
-            (c.id && c.id.toLowerCase() === String(chRef).toLowerCase()) ||
-            (c.handle && normalizeHandle(c.handle) === normalizeHandle(chRef))
-          ) || { id: chRef, name: chRef, handle: '', avatarUrl: '' };
+          const refStr = String(chRef);
+          const refLower = refStr.toLowerCase();
+          const refNorm = normalizeHandle(refStr);
+          const chObj = channels[refStr] ||
+            channelByToken.get(refLower) ||
+            (refNorm ? channelByToken.get(refNorm) : null) ||
+            { id: refStr, name: refStr, handle: '', avatarUrl: '' };
 
-          const key = (chObj.id || chObj.handle || chRef).toLowerCase();
+          const key = (chObj.id || chObj.handle || refStr).toLowerCase();
           if (!channelMap.has(key)) {
             channelMap.set(key, { ch: chObj, folders: [f.name] });
           } else {
@@ -1107,11 +1121,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                   }
                 });
 
-                // Mark newly subscribed channels in local storage
-                for (const r of batchResult.results) {
-                  if (r.result && r.result.success && r.channel?.id) {
-                    await YTFolderStorage.setChannelSubscribed(r.channel.id, true);
-                  }
+                // Mark newly subscribed channels in local storage with a single atomic write
+                const newlySubscribedUpdates = batchResult.results
+                  .filter(r => r.result && r.result.success && (r.channel?.id || r.channel?.handle))
+                  .map(r => ({
+                    ...r.channel,
+                    id: r.result.channelId || r.channel.id,
+                    isSubscribed: true
+                  }));
+                if (newlySubscribedUpdates.length > 0) {
+                  await YTFolderStorage.batchUpdateChannels(newlySubscribedUpdates);
                 }
 
                 autoSubSummary = `\n• YouTube 訂閱同步：\n  - 原已訂閱：${cmp.subscribed.length} 個\n  - 本次自動新增訂閱：${batchResult.succeeded} 個`;
@@ -1168,12 +1187,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                       }
                     }
                   });
-
-                  for (const r of unsubBatchResult.results) {
-                    if (r.result && r.result.success && r.channel?.id) {
-                      await YTFolderStorage.setChannelSubscribed(r.channel.id, false);
-                    }
-                  }
 
                   unsubSummary = `\n• YouTube 訂閱清理（取消訂閱）：\n  - 備份已刪除之訂閱頻道：${cmp.redundantSubscribed.length} 個\n  - 本次成功取消訂閱：${unsubBatchResult.succeeded} 個`;
                   if (unsubBatchResult.failed > 0) {
@@ -1264,12 +1277,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     let optionsReloadTimer = null;
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName === 'local' && (changes.yt_folders_v1 || changes.yt_channels_v1)) {
+      if (areaName === 'local' && (changes.yt_folders || changes.yt_channels || changes.yt_settings)) {
         if (optionsReloadTimer) clearTimeout(optionsReloadTimer);
         optionsReloadTimer = setTimeout(() => {
           optionsReloadTimer = null;
           loadData();
-        }, 100);
+        }, 150);
       }
     });
   }
