@@ -39,6 +39,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       .replace(/'/g, '&#39;');
   }
 
+  function sanitizeUrl(url) {
+    if (typeof YTFolderUtils !== 'undefined' && YTFolderUtils.sanitizeUrl) {
+      return YTFolderUtils.sanitizeUrl(url);
+    }
+    if (!url) return '#';
+    const trimmed = String(url).trim();
+    if (/^(?:javascript|data|vbscript):/i.test(trimmed)) {
+      return '#';
+    }
+    return escapeHtml(trimmed);
+  }
+
   async function refreshData() {
     allFolders = await YTFolderStorage.getFolders();
     allChannels = await YTFolderStorage.getChannels();
@@ -105,7 +117,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (matchedFolders.length === 0 && matchedChannels.length === 0) {
       folderListEl.innerHTML = `
         <div style="text-align: center; padding: 40px 10px; color: var(--text-secondary); font-size: 13px;">
-          沒有找到符合「${query}」的分組或頻道
+          沒有找到符合「${escapeHtml(query)}」的分組或頻道
         </div>
       `;
       return;
@@ -177,9 +189,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         const defaultAvatar = DEFAULT_AVATAR;
+        const safeAvatar = (typeof YTFolderStorage !== 'undefined' && YTFolderStorage.sanitizeAvatarUrl)
+          ? (YTFolderStorage.sanitizeAvatarUrl(ch.avatarUrl) || defaultAvatar)
+          : (ch.avatarUrl || defaultAvatar);
         item.innerHTML = `
           <div class="search-result-top">
-            <img class="search-result-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
+            <img class="search-result-avatar" src="${escapeHtml(safeAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
             <div class="search-result-info">
               <div class="search-result-name">${escapeHtml(ch.name || ch.handle)}</div>
               <div class="search-result-handle">${escapeHtml(ch.handle || ch.id)}</div>
@@ -207,8 +222,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         item.querySelector('.btn-go-channel').onclick = (e) => {
           e.stopPropagation();
-          const url = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
-          chrome.tabs.create({ url });
+          const rawUrl = ch.handle
+            ? `https://www.youtube.com/${encodeURIComponent(ch.handle).replace(/^%40/, '@')}`
+            : `https://www.youtube.com/channel/${encodeURIComponent(ch.id)}`;
+          const safeTarget = sanitizeUrl(rawUrl);
+          if (safeTarget && safeTarget !== '#') {
+            chrome.tabs.create({ url: rawUrl });
+          }
         };
 
         folderListEl.appendChild(item);

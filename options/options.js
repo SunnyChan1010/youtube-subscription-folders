@@ -126,6 +126,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.includes('youtube.com/')) {
         const urlObj = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+        const host = urlObj.hostname.toLowerCase();
+        if (host !== 'www.youtube.com' && host !== 'youtube.com' && host !== 'm.youtube.com') {
+          return null;
+        }
         const path = urlObj.pathname;
 
         const handleMatch = path.match(/^\/(@[^\/\?]+)/);
@@ -142,6 +146,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (customMatch) {
           return { id: `@${customMatch[1]}`, handle: `@${customMatch[1]}` };
         }
+        return null;
       }
     } catch (e) {}
 
@@ -387,7 +392,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (displayedChannels.length === 0) {
       channelsGridEl.innerHTML = `
         <div style="grid-column: 1 / -1; text-align: center; padding: 60px 0; color: var(--text-secondary);">
-          ${query ? `找不到符合「${query}」的頻道` : '此分組目前尚無頻道，可在上方輸入 handle (@handle) 或 ID 加入！'}
+          ${query ? `找不到符合「${escapeHtml(query)}」的頻道` : '此分組目前尚無頻道，可在上方輸入 handle (@handle) 或 ID 加入！'}
         </div>
       `;
       return;
@@ -533,7 +538,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       btnAddChannelSubmit.textContent = '解析中...';
       try {
         if (typeof YTSubscriptionService !== 'undefined' && YTSubscriptionService.resolveChannelDetails) {
-          const details = await YTSubscriptionService.resolveChannelDetails(inputVal);
+          const details = await YTSubscriptionService.resolveChannelDetails(parsed.handle || parsed.id);
           if (details) {
             if (details.id) id = details.id;
             if (details.name) channelName = details.name;
@@ -621,18 +626,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       showToast('❌ 匯出備份失敗，請稍後重試。', 3000);
     }
   };
-
-  if (btnCleanDuplicates) {
-    btnCleanDuplicates.onclick = async () => {
-      const res = await YTFolderStorage.cleanDuplicates();
-      await loadData();
-      if (res.removedCount > 0) {
-        showToast(`🧹 清理完成！共移除了 ${res.removedCount} 個重複頻道。`);
-      } else {
-        showToast('✨ 檢查完成，目前所有分組與未分類頻道均無重複項！');
-      }
-    };
-  }
 
   if (btnCheckUnsubscribed) {
     btnCheckUnsubscribed.onclick = handleCheckUnsubscribedChannels;
@@ -1266,6 +1259,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       }
     };
+  }
+
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+    let optionsReloadTimer = null;
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === 'local' && (changes.yt_folders_v1 || changes.yt_channels_v1)) {
+        if (optionsReloadTimer) clearTimeout(optionsReloadTimer);
+        optionsReloadTimer = setTimeout(() => {
+          optionsReloadTimer = null;
+          loadData();
+        }, 100);
+      }
+    });
   }
 
   // Initial Load

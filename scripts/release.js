@@ -174,17 +174,20 @@ async function main() {
 
   const tagName = `v${newVersion}`;
 
-  // 讀取 GitHub Token
-  const mcpConfigPath = 'C:/Users/samma/.gemini/config/mcp_config.json';
-  if (!fs.existsSync(mcpConfigPath)) {
-    console.log(`⚠️ 未找到 ${mcpConfigPath}，跳過遠端 GitHub Tag 建立。`);
-    return;
-  }
-
-  const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
-  const token = mcpConfig.mcpServers?.github?.env?.GITHUB_PERSONAL_ACCESS_TOKEN;
+  // 讀取 GitHub Token（優先從環境變數讀取，次選動態使用者目錄設定檔）
+  const os = require('os');
+  let token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN || '';
   if (!token) {
-    console.log(`⚠️ 未設定 GITHUB_PERSONAL_ACCESS_TOKEN，跳過 GitHub API 標籤建立。`);
+    const mcpConfigPath = process.env.MCP_CONFIG_PATH || path.join(os.homedir(), '.gemini', 'config', 'mcp_config.json');
+    if (fs.existsSync(mcpConfigPath)) {
+      try {
+        const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+        token = mcpConfig.mcpServers?.github?.env?.GITHUB_PERSONAL_ACCESS_TOKEN || '';
+      } catch (e) {}
+    }
+  }
+  if (!token) {
+    console.log(`⚠️ 未設定 GITHUB_PERSONAL_ACCESS_TOKEN，跳過遠端 GitHub API 標籤與 Release 建立。`);
     return;
   }
 
@@ -276,15 +279,32 @@ async function main() {
     }
   }
 
-  // 嘗試打包與上傳 Release ZIP 資產
+  // 嘗試打包與上傳 Release ZIP 資產（僅包含執行階段必要檔案，排除開發腳本）
   if (releaseData && releaseData.id) {
     const zipName = `youtube-subscription-folders-${tagName}.zip`;
     const zipPath = path.join(rootDir, zipName);
+    const stageDir = path.join(rootDir, '.release_stage');
     try {
       const { execSync } = require('child_process');
-      execSync(`powershell -Command "Compress-Archive -Path manifest.json, scripts, styles, options, popup, icons, README.md -DestinationPath '${zipName}' -Force"`, { cwd: rootDir });
+      if (fs.existsSync(stageDir)) fs.rmSync(stageDir, { recursive: true, force: true });
+      fs.mkdirSync(path.join(stageDir, 'scripts'), { recursive: true });
+
+      const runtimeScripts = ['background.js', 'content.js', 'initial_data.js', 'storage.js', 'youtube_api.js'];
+      for (const s of runtimeScripts) {
+        fs.copyFileSync(path.join(rootDir, 'scripts', s), path.join(stageDir, 'scripts', s));
+      }
+      for (const dir of ['styles', 'options', 'popup', 'icons']) {
+        fs.cpSync(path.join(rootDir, dir), path.join(stageDir, dir), { recursive: true });
+      }
+      for (const file of ['manifest.json', 'README.md']) {
+        fs.copyFileSync(path.join(rootDir, file), path.join(stageDir, file));
+      }
+
+      execSync(`powershell -Command "Compress-Archive -Path '${stageDir}\\*' -DestinationPath '${zipPath}' -Force"`, { cwd: rootDir });
+      fs.rmSync(stageDir, { recursive: true, force: true });
       console.log(`📦 已成功建立/刷新擴充功能安裝包: ${zipName}`);
     } catch (zipErr) {
+      if (fs.existsSync(stageDir)) fs.rmSync(stageDir, { recursive: true, force: true });
       console.warn(`⚠️ 建立 ZIP 套件失敗:`, zipErr.message);
     }
 

@@ -220,6 +220,69 @@ async function runTests() {
   });
   console.log('  ✅ 100% verified: All outbound requests are strictly confined to official YouTube/Google infrastructure (0 external leakage)');
 
+  // ---------------------------------------------------------------------------
+  // Test 6: Uncategorized Channel Visibility After Sync & Deduplication
+  // ---------------------------------------------------------------------------
+  console.log('\n[Test 6] Uncategorized Channel Visibility After Sync & Deduplication:');
+  mockStorage = {};
+  await YTFolderStorage.init();
+  await YTFolderStorage.batchAddChannels([
+    { id: 'UC_NEW_SYNC_1', name: 'New Synced Channel 1', handle: '@newsync1', avatarUrl: 'https://yt3.ggpht.com/a1.jpg' },
+    { id: 'UC_NEW_SYNC_2', name: 'New Synced Channel 2', handle: '@newsync2', avatarUrl: 'javascript:alert(1)' }
+  ]);
+  await YTFolderStorage.cleanDuplicates(true);
+  const uncatList = await YTFolderStorage.getUncategorizedChannels();
+  const uncatIds = uncatList.map(c => c.id);
+  assert.ok(uncatIds.includes('UC_NEW_SYNC_1'), 'Synced channel without explicit isSubscribed must default to true and appear in uncategorized');
+  assert.ok(uncatIds.includes('UC_NEW_SYNC_2'), 'Second synced channel must also appear in uncategorized after deduplication');
+  const allCh = await YTFolderStorage.getChannels();
+  assert.strictEqual(allCh['UC_NEW_SYNC_2'].avatarUrl, '', 'Malicious javascript: avatarUrl must be stripped during batchAddChannels');
+  console.log('  ✅ Synced channels retain isSubscribed=true across batchAddChannels and deduplicateData');
+
+  // ---------------------------------------------------------------------------
+  // Test 7: Concurrent Storage Mutex (Zero Lost Updates on Parallel Writes)
+  // ---------------------------------------------------------------------------
+  console.log('\n[Test 7] Concurrent Storage Mutex (Zero Lost Updates):');
+  // Simulate async latency in storage.local.get to trigger overlapping reads if unlocked
+  const origGet = global.chrome.storage.local.get;
+  global.chrome.storage.local.get = (keys, cb) => {
+    return new Promise(resolve => {
+      setTimeout(() => {
+        origGet(keys, (res) => {
+          if (cb) cb(res);
+          resolve(res);
+        });
+      }, 5);
+    });
+  };
+
+  const folder = await YTFolderStorage.addFolder({ name: 'Concurrent Test Folder', icon: '⚡' });
+  await Promise.all([
+    YTFolderStorage.addChannelToFolder(folder.id, { id: 'UC_CONC_1', name: 'Concurrent 1', handle: '@conc1' }),
+    YTFolderStorage.addChannelToFolder(folder.id, { id: 'UC_CONC_2', name: 'Concurrent 2', handle: '@conc2' }),
+    YTFolderStorage.addChannelToFolder(folder.id, { id: 'UC_CONC_3', name: 'Concurrent 3', handle: '@conc3' }),
+    YTFolderStorage.addChannelToFolder(folder.id, { id: 'UC_CONC_4', name: 'Concurrent 4', handle: '@conc4' }),
+    YTFolderStorage.addChannelToFolder(folder.id, { id: 'UC_CONC_5', name: 'Concurrent 5', handle: '@conc5' })
+  ]);
+
+  global.chrome.storage.local.get = origGet;
+  const updatedFolders = await YTFolderStorage.getFolders();
+  const targetFolder = updatedFolders.find(f => f.id === folder.id);
+  assert.strictEqual(targetFolder.channels.length, 5, 'All 5 concurrent channel additions must be preserved without lost updates');
+  console.log('  ✅ Re-entrant async mutex prevents Read-Modify-Write race conditions');
+
+  // ---------------------------------------------------------------------------
+  // Test 8: SSRF & Path Traversal Protection in YouTube Channel URL Builder
+  // ---------------------------------------------------------------------------
+  console.log('\n[Test 8] SSRF & Path Traversal Protection (buildSafeYouTubeChannelUrl):');
+  const YTSubscriptionService = require('../scripts/youtube_api.js');
+  assert.strictEqual(YTSubscriptionService.buildSafeYouTubeChannelUrl('https://evil.example.com/@victim'), null, 'Must block external SSRF host');
+  assert.strictEqual(YTSubscriptionService.buildSafeYouTubeChannelUrl('http://127.0.0.1:8080/admin'), null, 'Must block localhost SSRF');
+  assert.strictEqual(YTSubscriptionService.buildSafeYouTubeChannelUrl('@../../account_advanced'), null, 'Must block path traversal in handle');
+  assert.strictEqual(YTSubscriptionService.buildSafeYouTubeChannelUrl('https://www.youtube.com/@mkbhd'), 'https://www.youtube.com/@mkbhd', 'Allows valid YouTube handle URL');
+  assert.strictEqual(YTSubscriptionService.buildSafeYouTubeChannelUrl('UCBJycsmduvYEL83R_U4JriQ'), 'https://www.youtube.com/channel/UCBJycsmduvYEL83R_U4JriQ', 'Allows valid UC channel ID');
+  console.log('  ✅ buildSafeYouTubeChannelUrl blocks SSRF and path traversal vectors');
+
   console.log('\n🎉 ALL SECURITY & PERFORMANCE TESTS PASSED 100%! 🎉\n');
 }
 

@@ -249,10 +249,14 @@ allProductionJsFiles.forEach(f => {
   });
 });
 
-// 7.2 Verify presence of security sanitizers
+// 7.2 Verify presence of security sanitizers & origin/concurrency guards
 const contentJsContent = fs.readFileSync(path.join(rootDir, 'scripts', 'content.js'), 'utf8');
 const optionsJsContent = fs.readFileSync(path.join(rootDir, 'options', 'options.js'), 'utf8');
+const popupJsContent = fs.readFileSync(path.join(rootDir, 'popup', 'popup.js'), 'utf8');
 const storageJsContent = fs.readFileSync(path.join(rootDir, 'scripts', 'storage.js'), 'utf8');
+const backgroundJsContent = fs.readFileSync(path.join(rootDir, 'scripts', 'background.js'), 'utf8');
+const ytApiJsContent = fs.readFileSync(path.join(rootDir, 'scripts', 'youtube_api.js'), 'utf8');
+const releaseJsContent = fs.readFileSync(path.join(rootDir, 'scripts', 'release.js'), 'utf8');
 
 if (!contentJsContent.includes('function sanitizeUrl') || !/javascript/i.test(contentJsContent)) {
   recordError('Rule 7 - Security', 'scripts/content.js', null, 'content.js must contain sanitizeUrl with javascript pseudo-protocol blocking.');
@@ -262,12 +266,33 @@ if (!optionsJsContent.includes('function sanitizeUrl') || !/javascript/i.test(op
   recordError('Rule 7 - Security', 'options/options.js', null, 'options.js must contain sanitizeUrl with javascript pseudo-protocol blocking.');
 }
 
+if (popupJsContent.includes('「${query}」') || optionsJsContent.includes('「${query}」')) {
+  recordError('Rule 7 - Security', 'popup/popup.js / options/options.js', null, 'Unescaped ${query} inside template literal detected. Must wrap with escapeHtml(query).');
+}
+
 if (!storageJsContent.includes('function sanitizeSettings') || !storageJsContent.includes('__proto__')) {
   recordError('Rule 7 - Security', 'scripts/storage.js', null, 'storage.js must contain sanitizeSettings with __proto__ prototype pollution filtering.');
 }
 
 if (!storageJsContent.includes('function sanitizeAvatarUrl') || !storageJsContent.includes('function sanitizeFolderColor')) {
   recordError('Rule 7 - Security', 'scripts/storage.js', null, 'storage.js must contain sanitizeAvatarUrl and sanitizeFolderColor.');
+}
+
+if (!storageJsContent.includes('withStorageLock')) {
+  recordError('Rule 7 - Reliability', 'scripts/storage.js', null, 'storage.js must serialize read-modify-write mutations using withStorageLock.');
+}
+
+if (!/sender(?:\?\.|\.)id\s*!==\s*chrome\.runtime\.id/.test(backgroundJsContent) ||
+    !/sender(?:\?\.|\.)id\s*!==\s*chrome\.runtime\.id/.test(contentJsContent)) {
+  recordError('Rule 7 - Security', 'scripts/background.js / scripts/content.js', null, 'onMessage listeners must verify sender.id === chrome.runtime.id.');
+}
+
+if (!ytApiJsContent.includes('buildSafeYouTubeChannelUrl')) {
+  recordError('Rule 7 - Security', 'scripts/youtube_api.js', null, 'youtube_api.js must validate channel URLs using buildSafeYouTubeChannelUrl to prevent SSRF/path traversal.');
+}
+
+if (/C:[/\\]Users[/\\]/i.test(releaseJsContent)) {
+  recordError('Rule 4 - No Secrets', 'scripts/release.js', null, 'Hardcoded local user directory path detected in release.js.');
 }
 
 // 7.3 Verify zero unauthorized outbound network traffic

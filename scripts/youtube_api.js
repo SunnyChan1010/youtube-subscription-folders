@@ -216,6 +216,38 @@ const YTSubscriptionService = (() => {
   }
 
   /**
+   * Builds a strictly validated YouTube channel URL, rejecting external domains (SSRF) and path traversal.
+   */
+  function buildSafeYouTubeChannelUrl(handleOrId) {
+    if (!handleOrId) return null;
+    const clean = String(handleOrId).trim();
+
+    if (/^https?:\/\//i.test(clean)) {
+      try {
+        const parsed = new URL(clean);
+        if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:') ||
+            (parsed.hostname !== 'www.youtube.com' && parsed.hostname !== 'youtube.com' && parsed.hostname !== 'm.youtube.com')) {
+          return null;
+        }
+        const m = parsed.pathname.match(/^\/(@[a-zA-Z0-9_.\-\u0080-\uFFFF]+|channel\/UC[a-zA-Z0-9_-]{22}|(?:c|user)\/[a-zA-Z0-9_.\-\u0080-\uFFFF]+)/);
+        return m ? `https://www.youtube.com/${m[1]}` : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    if (/^UC[a-zA-Z0-9_-]{22}$/.test(clean)) {
+      return `https://www.youtube.com/channel/${clean}`;
+    }
+
+    const rawHandle = clean.replace(/^@/, '');
+    if (!rawHandle || /[\/\\?#\s.]\./.test(rawHandle) || /[\/\\?#\s<>"']/.test(rawHandle)) {
+      return null;
+    }
+    return `https://www.youtube.com/@${encodeURIComponent(rawHandle)}`;
+  }
+
+  /**
    * Resolves channel handle (@username or custom name) to canonical YouTube Channel ID (UC...)
    */
   async function resolveChannelId(handleOrId) {
@@ -228,7 +260,7 @@ const YTSubscriptionService = (() => {
     }
 
     const details = await resolveChannelDetails(clean);
-    return details ? details.id : clean;
+    return details ? details.id : null;
   }
 
   /**
@@ -243,8 +275,10 @@ const YTSubscriptionService = (() => {
     let name = '';
     let avatarUrl = '';
 
-    const path = clean.startsWith('@') ? clean : (clean.startsWith('http') ? '' : (canonicalId ? `channel/${canonicalId}` : `@${clean}`));
-    const url = clean.startsWith('http') ? clean : `https://www.youtube.com/${path}`;
+    const url = buildSafeYouTubeChannelUrl(clean);
+    if (!url) {
+      return null;
+    }
 
     try {
       const resp = await fetch(url, {
@@ -509,10 +543,6 @@ const YTSubscriptionService = (() => {
             return { tabId: t.id, isTemp: false };
           }
         }
-      }
-
-      if (tabs.length > 0 && tabs[0].id) {
-        return { tabId: tabs[0].id, isTemp: false };
       }
 
       const tempTab = await chrome.tabs.create({
@@ -1271,6 +1301,7 @@ const YTSubscriptionService = (() => {
     getSapisidHash,
     getSapisidCookie,
     getAuthSession,
+    buildSafeYouTubeChannelUrl,
     resolveChannelId,
     resolveChannelDetails,
     acquireExecutionTab,

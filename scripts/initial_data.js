@@ -68,11 +68,76 @@ function isSystemActionTitle(title) {
   return false;
 }
 
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sanitizeUrl(url) {
+  if (!url) return '#';
+  const trimmed = String(url).trim();
+  if (/^(?:javascript|data|vbscript):/i.test(trimmed) || /^\/\//.test(trimmed)) {
+    return '#';
+  }
+  return escapeHtml(trimmed);
+}
+
+function sanitizeAvatarUrl(url) {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (/[\s<>"'`]/.test(trimmed)) return '';
+  if (/^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,[a-zA-Z0-9+/=]+$/i.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return trimmed;
+      }
+    } catch (e) {}
+  }
+  return '';
+}
+
+function sanitizeFolderColor(color) {
+  if (!color || typeof color !== 'string') return '#2196f3';
+  const trimmed = color.trim();
+  return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(trimmed) ? trimmed : '#2196f3';
+}
+
+function sanitizeFolderIcon(icon) {
+  if (!icon || typeof icon !== 'string') return '📁';
+  const clean = icon.replace(/[<>"'&]/g, '').trim();
+  return clean ? clean.slice(0, 10) : '📁';
+}
+
+function normalizeHandle(h) {
+  if (!h) return '';
+  return String(h).trim().toLowerCase().replace(/^@/, '');
+}
+
+const YTFolderUtils = {
+  escapeHtml,
+  sanitizeUrl,
+  sanitizeAvatarUrl,
+  sanitizeFolderColor,
+  sanitizeFolderIcon,
+  normalizeHandle,
+  isSystemActionTitle
+};
+
 if (typeof globalThis !== 'undefined') {
   globalThis.YT_INITIAL_DATA = YT_INITIAL_DATA;
   globalThis.YT_DEFAULT_AVATAR = YT_DEFAULT_AVATAR;
   globalThis.YT_INVALID_CHANNEL_TITLES = YT_INVALID_CHANNEL_TITLES;
   globalThis.isSystemActionTitle = isSystemActionTitle;
+  globalThis.YTFolderUtils = YTFolderUtils;
 }
 
 if (typeof module !== 'undefined') {
@@ -81,4 +146,6 @@ if (typeof module !== 'undefined') {
   module.exports.YT_DEFAULT_AVATAR = YT_DEFAULT_AVATAR;
   module.exports.YT_INVALID_CHANNEL_TITLES = YT_INVALID_CHANNEL_TITLES;
   module.exports.isSystemActionTitle = isSystemActionTitle;
+  module.exports.YTFolderUtils = YTFolderUtils;
 }
+

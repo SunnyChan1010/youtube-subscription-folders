@@ -440,8 +440,11 @@
 
     requestAnimationFrame(() => {
       try {
-        const videoCards = document.querySelectorAll(
-          'ytd-browse ytd-rich-item-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer'
+        const feedRoot = document.querySelector('ytd-browse[page-subtype="subscriptions"]') ||
+                         document.querySelector('ytd-browse:not([hidden])') ||
+                         document;
+        const videoCards = feedRoot.querySelectorAll(
+          'ytd-rich-item-renderer, ytd-grid-video-renderer'
         );
 
         let allowedIds = new Set();
@@ -570,7 +573,7 @@
         });
 
         // 5. Hide unrelated Shorts shelves when filtering by folder or hideShorts is active
-        const shelfSections = document.querySelectorAll('ytd-rich-section-renderer, ytd-reel-shelf-renderer');
+        const shelfSections = feedRoot.querySelectorAll('ytd-rich-section-renderer, ytd-reel-shelf-renderer');
         shelfSections.forEach(shelf => {
           if (activeFilterFolderId !== 'all' || hideShorts) {
             shelf.classList.add('yt-org-hidden');
@@ -883,10 +886,28 @@
     const isChannelPage = pathname.startsWith('/@') || pathname.startsWith('/channel/') || pathname.startsWith('/c/') || pathname.startsWith('/user/');
     const isWatchPage = pathname.startsWith('/watch');
 
+    const existing = document.getElementById('yt-org-channel-tagger-wrapper');
     if (!isChannelPage && !isWatchPage) {
-      const existing = document.getElementById('yt-org-channel-tagger-wrapper');
       if (existing) existing.remove();
       return;
+    }
+
+    // Fast-path: If tagger already exists and is visible for the current URL, avoid full DOM scans
+    const currentUrlKey = `${pathname}${window.location.search}`;
+    if (existing && existing.dataset.urlKey === currentUrlKey) {
+      const existingRect = existing.getBoundingClientRect();
+      if (existingRect.width > 0 && existingRect.height > 0) {
+        const currentSubState = getPageSubscriptionState();
+        if (existing.dataset.lastSubState !== currentSubState) {
+          existing.dataset.lastSubState = currentSubState;
+          const existingBtn = existing.querySelector('#yt-org-tagger-toggle-btn');
+          const channelInfo = isChannelPage ? extractCurrentChannelInfo() : extractWatchPageChannelInfo();
+          if (existingBtn && channelInfo) {
+            updateTaggerButtonAppearance(existingBtn, channelInfo);
+          }
+        }
+        return;
+      }
     }
 
     let actionContainer = null;
@@ -929,12 +950,12 @@
     if (!channelInfo || (!channelInfo.id && !channelInfo.handle)) return;
 
     const channelKey = channelInfo.id || channelInfo.handle;
-    const existing = document.getElementById('yt-org-channel-tagger-wrapper');
 
     if (existing) {
       const existingRect = existing.getBoundingClientRect();
       const isRenderedAndVisible = existing.dataset.channelKey === channelKey && (existingRect.width > 0 && existingRect.height > 0);
       if (isRenderedAndVisible) {
+        existing.dataset.urlKey = currentUrlKey;
         const currentSubState = getPageSubscriptionState();
         if (existing.dataset.lastSubState !== currentSubState) {
           existing.dataset.lastSubState = currentSubState;
@@ -956,6 +977,7 @@
     wrapper.id = 'yt-org-channel-tagger-wrapper';
     wrapper.className = 'yt-org-channel-tagger-container';
     wrapper.dataset.channelKey = channelKey;
+    wrapper.dataset.urlKey = currentUrlKey;
     wrapper.dataset.lastSubState = getPageSubscriptionState();
 
     const btn = document.createElement('button');
@@ -1159,7 +1181,8 @@
             id: id || handle,
             name: finalNodeName,
             handle,
-            avatarUrl: img
+            avatarUrl: img,
+            isSubscribed: true
           });
         }
       });
@@ -1360,21 +1383,46 @@
   window.addEventListener('yt-page-data-updated', onPageUpdate);
   window.addEventListener('popstate', onPageUpdate);
 
-  window.addEventListener('yt-folders-storage-updated', async () => {
-    await loadData();
-    injectSidebarSection();
-    if (window.location.pathname.startsWith('/feed/subscriptions')) {
-      checkAndInjectFeedFilter();
-    }
-  });
+  let storageReloadDebounceTimer = null;
+  async function syncFromStorageChange() {
+    if (storageReloadDebounceTimer) clearTimeout(storageReloadDebounceTimer);
+    storageReloadDebounceTimer = setTimeout(async () => {
+      storageReloadDebounceTimer = null;
+      await loadData();
+      injectSidebarSection();
+      if (window.location.pathname.startsWith('/feed/subscriptions')) {
+        checkAndInjectFeedFilter();
+      }
+      const existingBtn = document.getElementById('yt-org-tagger-toggle-btn');
+      if (existingBtn) {
+        const isChannelPage = window.location.pathname.startsWith('/@') || window.location.pathname.startsWith('/channel/');
+        const channelInfo = isChannelPage ? extractCurrentChannelInfo() : extractWatchPageChannelInfo();
+        if (channelInfo) updateTaggerButtonAppearance(existingBtn, channelInfo);
+      }
+    }, 80);
+  }
+
+  window.addEventListener('yt-folders-storage-updated', syncFromStorageChange);
+
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === 'local' && (changes.yt_folders_v1 || changes.yt_channels_v1 || changes.yt_settings_v1)) {
+        syncFromStorageChange();
+      }
+    });
+  }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (!msg || typeof msg !== 'object') return false;
+    if (sender && sender.id && sender.id !== chrome.runtime.id) return false;
+
     if (msg.action === 'PING') {
       sendResponse({ status: 'PONG', ready: true });
       return false;
     }
     if (msg.action === 'STORAGE_UPDATED') {
-      onPageUpdate();
+      syncFromStorageChange();
+      return false;
     }
     if (msg.action === 'SET_FILTER_FOLDER') {
       activeFilterFolderId = msg.folderId || 'all';

@@ -4,6 +4,37 @@
 
 ---
 
+## [1.1.1] - 2026-10-14
+
+### 🛡️ 安全性強化 (Security)
+- **修補 DOM XSS 與屬性注入弱點**：
+  - 於 `popup.js` 與 `options.js` 的搜尋無結果狀態中強制對查詢字串執行 `escapeHtml(query)` 轉義，並在所有頻道寫入端點強制執行 `sanitizeAvatarUrl()` 與 `sanitizeUrl()`。
+  - 收緊 `sanitizeFolderColor()` 正規表達式，僅允許標準 3/4/6/8 碼 Hex 色碼（`#RGB` / `#RGBA` / `#RRGGBB` / `#RRGGBBAA`）。
+- **防禦 SSRF 與路徑穿越 (`buildSafeYouTubeChannelUrl`)**：
+  - 於 `youtube_api.js` 與 `options.js` 新增嚴格 YouTube 官方網域白名單（`www.youtube.com` / `youtube.com` / `m.youtube.com`）與頻道路徑格式校驗，阻絕外部主機請求與路徑穿越。
+- **擴充套件訊息邊界驗證**：
+  - 於 `background.js` 與 `content.js` 的 `chrome.runtime.onMessage` 強制驗證 `sender.id === chrome.runtime.id` 與特權指令發起端來源。
+- **最小權限與純淨打包**：
+  - 移除 `manifest.json` 中未使用的 `web_accessible_resources` 項目，並重構 `release.js` 僅將執行期必要檔案打包入 Release ZIP。
+
+### 🐛 問題修復與穩定性提升 (Fixed)
+- **解決可重入非同步互斥鎖 (`withStorageLock`) 並發競爭條件**：
+  - 序列化 `storage.js` 所有 `chrome.storage.local` 的 Read-Modify-Write 操作，徹底根除快速連續點擊分組或背景同步同時觸發時的資料覆蓋遺失（Lost Update）。
+- **修復新同步與去重後「未分類頻道」被隱藏的問題**：
+  - 修正 `batchAddChannels()` 與 `deduplicateData()` 中 `isSubscribed` 預設值為 `true`（`raw.isSubscribed !== false`），並於 `/feed/channels` 一鍵同步時顯式標記 `isSubscribed: true`。
+- **跨分頁即時狀態同步 (`chrome.storage.onChanged`)**：
+  - 於 `background.js`、`content.js` 與 `options.js` 補齊 `STORAGE_UPDATED` 廣播與 `chrome.storage.onChanged` 監聽，確保多開分頁與管理後台即時同步。
+- **移除無效分頁 Fallback 與死碼**：
+  - 移除 `acquireExecutionTab()` 對無回應 YouTube 分頁的盲目回退，並清理 `options.js` 重複綁定的事件處理器。
+
+### ⚡ 效能最佳化 (Changed)
+- **$O(N)$ 雜湊索引取代 $O(N^2)$ 線性掃描**：
+  - 重構 `deduplicateData()`、`getUncategorizedChannels()`、`enrichChannelsMetadata()` 與 `batchAddChannels()`，預先建立 `Map` / `Set` 索引，大幅提升數百個訂閱頻道下的去重與檢索速度。
+- **YouTube DOM 查詢範圍收斂與 Fast-Path**：
+  - 於 `checkAndInjectChannelTagger()` 新增 `dataset.urlKey` 快速返回守衛，並將 `applyFeedFilters()` 查詢範圍限制於活躍的 `ytd-browse` 容器。
+
+---
+
 ## [1.1.0] - 2026-10-11
 
 ### 🚀 新增功能 (Added)
