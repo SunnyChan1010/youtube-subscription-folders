@@ -40,7 +40,8 @@ html[dark] #yt-org-sidebar-section {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px 8px 24px;
+  padding: 8px 12px;
+  margin: 0 12px;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -89,7 +90,8 @@ html[dark] .yt-org-sidebar-header:hover {
 }
 
 .yt-org-sidebar-search-container {
-  padding: 4px 16px 8px 24px;
+  padding: 4px 12px 8px 12px;
+  margin: 0 12px;
 }
 
 .yt-org-sidebar-search-input {
@@ -97,7 +99,7 @@ html[dark] .yt-org-sidebar-header:hover {
   box-sizing: border-box;
   padding: 6px 10px;
   border-radius: 14px;
-  border: 1px solid var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.15));
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(0, 0, 0, 0.12));
   background: var(--yt-spec-badge-chip-background, rgba(0, 0, 0, 0.05));
   color: var(--yt-spec-text-primary, #0f0f0f);
   font-size: 12px;
@@ -106,12 +108,82 @@ html[dark] .yt-org-sidebar-header:hover {
 }
 
 html[dark] .yt-org-sidebar-search-input {
+  border-color: var(--yt-spec-10-percent-layer, rgba(255, 255, 255, 0.15));
   background: var(--yt-spec-badge-chip-background, rgba(255, 255, 255, 0.08));
   color: var(--yt-spec-text-primary, #f1f1f1);
 }
 
 .yt-org-sidebar-search-input:focus {
   border-color: #ff0033;
+}
+
+.yt-org-onboarding-card {
+  margin: 0 12px 8px 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(33, 150, 243, 0.08);
+  border: 1px solid rgba(33, 150, 243, 0.25);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--yt-spec-text-primary, #0f0f0f);
+}
+
+html[dark] .yt-org-onboarding-card {
+  background: rgba(33, 150, 243, 0.14);
+  border-color: rgba(33, 150, 243, 0.35);
+  color: var(--yt-spec-text-primary, #f1f1f1);
+}
+
+.yt-org-onboarding-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 12.5px;
+  margin-bottom: 4px;
+}
+
+.yt-org-onboarding-dismiss {
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.yt-org-onboarding-dismiss:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+html[dark] .yt-org-onboarding-dismiss:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.yt-org-onboarding-desc {
+  opacity: 0.85;
+  margin-bottom: 8px;
+}
+
+.yt-org-onboarding-cta {
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: none;
+  background: #2196f3;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.yt-org-onboarding-cta:hover {
+  background: #1976d2;
 }
 
 .yt-org-folder-list {
@@ -127,14 +199,14 @@ html[dark] .yt-org-sidebar-search-input {
 .yt-org-folder-row {
   display: flex;
   align-items: center;
-  padding: 6px 16px 6px 24px;
+  padding: 6px 12px;
   border-radius: 10px;
   margin: 0 12px;
   cursor: pointer;
   font-size: 14px;
   transition: background-color 0.15s ease;
   user-select: none;
-  gap: 10px;
+  gap: 8px;
 }
 
 .yt-org-folder-row:hover {
@@ -203,14 +275,14 @@ html[dark] .yt-org-folder-badge {
 .yt-org-channel-item {
   display: flex;
   align-items: center;
-  padding: 5px 16px 5px 44px;
+  padding: 5px 12px 5px 32px;
   margin: 0 12px;
   border-radius: 8px;
   cursor: pointer;
   text-decoration: none;
   color: inherit;
   font-size: 13px;
-  gap: 10px;
+  gap: 8px;
   transition: background-color 0.15s;
 }
 
@@ -309,6 +381,14 @@ html[dark] .yt-org-channel-item:hover {
   font-weight: 600;
 }
 
+.yt-org-chip.muted {
+  background: rgba(180, 40, 40, 0.28) !important;
+  color: #ff6b6b !important;
+  border-color: #ff4d4d !important;
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+
 .yt-org-chip-badge {
   font-size: 11px;
   opacity: 0.85;
@@ -368,25 +448,36 @@ html[dark] .yt-org-channel-item:hover {
   border-radius: 18px !important;
   font-size: 14px !important;
   font-weight: 500 !important;
-  border: 1px solid rgba(255, 255, 255, 0.2) !important;
-  background: rgba(255, 255, 255, 0.1) !important;
-  color: #f1f1f1 !important;
+  border: 1px solid var(--yt-spec-10-percent-layer, rgba(0, 0, 0, 0.15)) !important;
+  background: var(--yt-spec-badge-chip-background, rgba(0, 0, 0, 0.05)) !important;
+  color: var(--yt-spec-text-primary, #0f0f0f) !important;
   cursor: pointer !important;
   transition: all 0.2s !important;
   user-select: none !important;
   white-space: nowrap !important;
 }
 
+html[dark] .yt-org-channel-tagger-btn {
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #f1f1f1 !important;
+}
+
 .yt-org-channel-tagger-btn:hover {
-  background: rgba(255, 255, 255, 0.2) !important;
-  border-color: rgba(255, 255, 255, 0.35) !important;
+  background: rgba(128, 128, 128, 0.18) !important;
+  border-color: rgba(128, 128, 128, 0.35) !important;
 }
 
 .yt-org-channel-tagger-btn.has-folders {
-  background: rgba(255, 0, 51, 0.18) !important;
+  background: rgba(255, 0, 51, 0.14) !important;
   border-color: #ff0033 !important;
-  color: #ff6b6b !important;
+  color: #e6002e !important;
   font-weight: 600 !important;
+}
+
+html[dark] .yt-org-channel-tagger-btn.has-folders {
+  background: rgba(255, 0, 51, 0.18) !important;
+  color: #ff6b6b !important;
 }
 
 /* Global Floating Dropdown Menu (Fixed to body to prevent overflow clipping) */
@@ -419,6 +510,48 @@ html[dark] .yt-org-channel-item:hover {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.yt-org-dropdown-quick-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.yt-org-dropdown-quick-input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: #f1f1f1;
+  font-size: 12.5px;
+  padding: 5px 8px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.yt-org-dropdown-quick-input:focus {
+  border-color: #ff0033;
+}
+
+.yt-org-dropdown-quick-btn {
+  background: #ff0033;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.yt-org-dropdown-quick-btn:hover {
+  opacity: 0.9;
 }
 
 .yt-org-dropdown-item {

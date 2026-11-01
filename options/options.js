@@ -40,6 +40,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnImportBackup = document.getElementById('btn-import-backup');
   const btnCleanDuplicates = document.getElementById('btn-clean-duplicates');
   const btnCheckUnsubscribed = document.getElementById('btn-check-unsubscribed');
+  const btnCloudSync = document.getElementById('btn-cloud-sync');
+
+  // Bulk Action Bar Elements
+  const bulkActionBar = document.getElementById('bulk-action-bar');
+  const bulkSelectAll = document.getElementById('bulk-select-all');
+  const bulkSelectionCount = document.getElementById('bulk-selection-count');
+  const bulkFolderSelect = document.getElementById('bulk-folder-select');
+  const bulkBtnApplyFolder = document.getElementById('bulk-btn-apply-folder');
+  const bulkBtnRemoveSelected = document.getElementById('bulk-btn-remove-selected');
+  let selectedChannelKeys = new Set();
+  let activeSharedTabContext = null;
 
   // Modals
   const folderModal = document.getElementById('folder-modal');
@@ -47,6 +58,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const modalInputName = document.getElementById('modal-input-name');
   const modalInputIcon = document.getElementById('modal-input-icon');
   const modalInputDesc = document.getElementById('modal-input-desc');
+  const modalInputKeywords = document.getElementById('modal-input-keywords');
   const modalBtnCancel = document.getElementById('modal-btn-cancel');
   const modalBtnSave = document.getElementById('modal-btn-save');
 
@@ -184,7 +196,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 1. Normal Folders (Filtered if query present)
     const filteredFolders = q
-      ? allFolders.filter(f => (f.name && f.name.toLowerCase().includes(q)) || (f.description && f.description.toLowerCase().includes(q)))
+      ? allFolders.filter(f => (f.name && f.name.toLowerCase().includes(q)) || (f.icon && f.icon.toLowerCase().includes(q)) || (f.description && f.description.toLowerCase().includes(q)))
       : allFolders;
 
     filteredFolders.forEach((folder) => {
@@ -283,7 +295,157 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  let bulkBarListenersBound = false;
+  let currentlyDisplayedChannels = [];
+  let lastSelectedChannelIndex = -1;
+
+  function updateBulkActionBar(displayedChannels) {
+    if (!bulkActionBar) return;
+    if (!displayedChannels || displayedChannels.length === 0) {
+      bulkActionBar.style.display = 'none';
+      selectedChannelKeys.clear();
+      lastSelectedChannelIndex = -1;
+      return;
+    }
+
+    bulkActionBar.style.display = 'flex';
+    const count = selectedChannelKeys.size;
+    const total = displayedChannels.length;
+
+    if (bulkSelectionCount) {
+      bulkSelectionCount.textContent = count > 0
+        ? `已選擇 ${count} / ${total} 個頻道 (支援 Shift 連選)`
+        : `全選所有頻道 (0 / ${total})`;
+    }
+    if (bulkSelectAll) {
+      bulkSelectAll.checked = count === total && total > 0;
+      bulkSelectAll.indeterminate = count > 0 && count < total;
+    }
+    if (bulkFolderSelect) {
+      const availableFolders = allFolders.filter(f => f.id !== activeFolderId);
+      const currentVal = bulkFolderSelect.value;
+      bulkFolderSelect.innerHTML = `<option value="">移動至分組...</option>` +
+        availableFolders.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.icon || '📁')} ${escapeHtml(f.name)}</option>`).join('');
+      if (currentVal && availableFolders.some(f => f.id === currentVal)) {
+        bulkFolderSelect.value = currentVal;
+      }
+    }
+    if (bulkBtnApplyFolder) {
+      bulkBtnApplyFolder.disabled = count === 0;
+      bulkBtnApplyFolder.style.opacity = count === 0 ? '0.5' : '1';
+    }
+    if (bulkBtnRemoveSelected) {
+      const isUncat = !activeFolderId || activeFolderId === '__uncategorized__';
+      bulkBtnRemoveSelected.style.display = isUncat ? 'none' : 'inline-block';
+      bulkBtnRemoveSelected.disabled = count === 0;
+      bulkBtnRemoveSelected.style.opacity = count === 0 ? '0.5' : '1';
+    }
+  }
+
+  function handleChannelSelection(index, isChecked, isShift) {
+    if (!currentlyDisplayedChannels || currentlyDisplayedChannels.length === 0) return;
+    if (isShift && lastSelectedChannelIndex >= 0 && lastSelectedChannelIndex < currentlyDisplayedChannels.length) {
+      const start = Math.min(lastSelectedChannelIndex, index);
+      const end = Math.max(lastSelectedChannelIndex, index);
+      for (let i = start; i <= end; i++) {
+        const item = currentlyDisplayedChannels[i];
+        const k = item ? (item.id || item.handle) : null;
+        if (k) {
+          if (isChecked) selectedChannelKeys.add(k);
+          else selectedChannelKeys.delete(k);
+        }
+      }
+    } else {
+      const item = currentlyDisplayedChannels[index];
+      const k = item ? (item.id || item.handle) : null;
+      if (k) {
+        if (isChecked) selectedChannelKeys.add(k);
+        else selectedChannelKeys.delete(k);
+      }
+    }
+    lastSelectedChannelIndex = index;
+
+    // Synchronize checkboxes in DOM
+    const allCheckboxes = channelsGridEl.querySelectorAll('.channel-card-checkbox');
+    allCheckboxes.forEach(cb => {
+      const key = cb.dataset.channelKey;
+      cb.checked = selectedChannelKeys.has(key);
+    });
+
+    updateBulkActionBar(currentlyDisplayedChannels);
+  }
+
+  function setupBulkActionBarListeners() {
+    if (bulkBarListenersBound) return;
+    bulkBarListenersBound = true;
+
+    if (bulkSelectAll) {
+      bulkSelectAll.onchange = () => {
+        if (bulkSelectAll.checked) {
+          currentlyDisplayedChannels.forEach(ch => {
+            const k = ch.id || ch.handle;
+            if (k) selectedChannelKeys.add(k);
+          });
+        } else {
+          selectedChannelKeys.clear();
+        }
+        lastSelectedChannelIndex = -1;
+        const allCheckboxes = channelsGridEl.querySelectorAll('.channel-card-checkbox');
+        allCheckboxes.forEach(cb => {
+          cb.checked = bulkSelectAll.checked;
+        });
+        updateBulkActionBar(currentlyDisplayedChannels);
+      };
+    }
+
+    if (bulkBtnApplyFolder) {
+      bulkBtnApplyFolder.onclick = async () => {
+        const targetFolderId = bulkFolderSelect?.value;
+        if (!targetFolderId) {
+          alert('請先選擇要移入的目標分組');
+          return;
+        }
+        if (selectedChannelKeys.size === 0) return;
+
+        const keys = Array.from(selectedChannelKeys);
+        const targetFolder = allFolders.find(f => f.id === targetFolderId);
+        showToast(`正在批次移動 ${keys.length} 個頻道至「${targetFolder?.name || '目標分組'}」...`);
+        const res = await YTFolderStorage.batchMoveChannels(activeFolderId, targetFolderId, keys);
+        showToast(`已成功將 ${res.movedCount || keys.length} 個頻道移動至「${targetFolder?.name || '目標分組'}」！`);
+        selectedChannelKeys.clear();
+        lastSelectedChannelIndex = -1;
+        await loadData();
+      };
+    }
+
+    if (bulkBtnRemoveSelected) {
+      bulkBtnRemoveSelected.onclick = async () => {
+        if (!activeFolderId || activeFolderId === '__uncategorized__') return;
+        if (selectedChannelKeys.size === 0) return;
+
+        const folder = allFolders.find(f => f.id === activeFolderId);
+        const keys = Array.from(selectedChannelKeys);
+        showToast(`正在自「${folder?.name || '此分組'}」移除 ${keys.length} 個頻道...`);
+        const res = await YTFolderStorage.batchRemoveChannelsFromFolder(activeFolderId, keys);
+        showToast(`已成功自「${folder?.name || '此分組'}」移除 ${res.removedCount || keys.length} 個頻道！`);
+        selectedChannelKeys.clear();
+        lastSelectedChannelIndex = -1;
+        await loadData();
+      };
+    }
+  }
+
+  let lastActiveFolderId = null;
+
   function renderActiveFolderChannels(searchQuery = '') {
+    setupBulkActionBarListeners();
+
+    if (lastActiveFolderId !== activeFolderId) {
+      selectedChannelKeys.clear();
+      lastSelectedChannelIndex = -1;
+      lastActiveFolderId = activeFolderId;
+    }
+
     // Handling Smart "Uncategorized" Folder
     if (activeFolderId === '__uncategorized__') {
       headerFolderIcon.textContent = '📂';
@@ -305,6 +467,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         );
       }
 
+      currentlyDisplayedChannels = displayed;
       channelsGridEl.innerHTML = '';
       if (displayed.length === 0) {
         channelsGridEl.innerHTML = `
@@ -312,18 +475,25 @@ document.addEventListener('DOMContentLoaded', async () => {
             🎉 太棒了！所有頻道都已經被妥善分組，沒有未分類頻道。
           </div>
         `;
+        updateBulkActionBar([]);
         return;
       }
 
-      displayed.forEach(ch => {
+      updateBulkActionBar(displayed);
+
+      const fragment = document.createDocumentFragment();
+
+      displayed.forEach((ch, idx) => {
         const card = document.createElement('div');
         card.className = 'channel-card';
         const defaultAvatar = DEFAULT_AVATAR;
+        const chKey = ch.id || ch.handle;
         const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
 
         const folderOptions = allFolders.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.icon || '📁')} ${escapeHtml(f.name)}</option>`).join('');
 
         card.innerHTML = `
+          <input type="checkbox" class="channel-card-checkbox" data-channel-key="${escapeHtml(chKey)}" ${selectedChannelKeys.has(chKey) ? 'checked' : ''} style="cursor: pointer; margin-right: 2px;" />
           <img class="channel-card-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
           <div class="channel-card-info">
             <a class="channel-card-title" href="${sanitizeUrl(chUrl)}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
@@ -337,6 +507,21 @@ document.addEventListener('DOMContentLoaded', async () => {
           </div>
         `;
 
+        const chk = card.querySelector('.channel-card-checkbox');
+        if (chk) {
+          chk.onclick = (e) => {
+            e.stopPropagation();
+            handleChannelSelection(idx, chk.checked, e.shiftKey);
+          };
+        }
+
+        card.onclick = (e) => {
+          if (e.target.closest('a, button, select, input')) return;
+          const isNowChecked = !selectedChannelKeys.has(chKey);
+          if (chk) chk.checked = isNowChecked;
+          handleChannelSelection(idx, isNowChecked, e.shiftKey);
+        };
+
         card.querySelector('.select-folder-assign').onchange = async (e) => {
           const targetFolderId = e.target.value;
           if (targetFolderId) {
@@ -347,8 +532,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         };
 
-        channelsGridEl.appendChild(card);
+        fragment.appendChild(card);
       });
+      channelsGridEl.appendChild(fragment);
       return;
     }
 
@@ -368,6 +554,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           請在左側點選或建立一個分組
         </div>
       `;
+      updateBulkActionBar([]);
       return;
     }
 
@@ -387,6 +574,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       );
     }
 
+    currentlyDisplayedChannels = displayedChannels;
     channelsGridEl.innerHTML = '';
 
     if (displayedChannels.length === 0) {
@@ -395,18 +583,25 @@ document.addEventListener('DOMContentLoaded', async () => {
           ${query ? `找不到符合「${escapeHtml(query)}」的頻道` : '此分組目前尚無頻道，可在上方輸入 handle (@handle) 或 ID 加入！'}
         </div>
       `;
+      updateBulkActionBar([]);
       return;
     }
 
-    displayedChannels.forEach(ch => {
+    updateBulkActionBar(displayedChannels);
+
+    const fragment = document.createDocumentFragment();
+
+    displayedChannels.forEach((ch, idx) => {
       const card = document.createElement('div');
       card.className = 'channel-card';
       const defaultAvatar = DEFAULT_AVATAR;
+      const chKey = ch.id || ch.handle;
       const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
       const otherFolders = allFolders.filter(f => f.id !== folder.id);
       const moveOptions = otherFolders.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.icon || '📁')} ${escapeHtml(f.name)}</option>`).join('');
 
       card.innerHTML = `
+        <input type="checkbox" class="channel-card-checkbox" data-channel-key="${escapeHtml(chKey)}" ${selectedChannelKeys.has(chKey) ? 'checked' : ''} style="cursor: pointer; margin-right: 2px;" />
         <img class="channel-card-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
         <div class="channel-card-info">
           <a class="channel-card-title" href="${sanitizeUrl(chUrl)}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
@@ -423,28 +618,44 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
       `;
 
+      const chk = card.querySelector('.channel-card-checkbox');
+      if (chk) {
+        chk.onclick = (e) => {
+          e.stopPropagation();
+          handleChannelSelection(idx, chk.checked, e.shiftKey);
+        };
+      }
+
+      card.onclick = (e) => {
+        if (e.target.closest('a, button, select, input')) return;
+        const isNowChecked = !selectedChannelKeys.has(chKey);
+        if (chk) chk.checked = isNowChecked;
+        handleChannelSelection(idx, isNowChecked, e.shiftKey);
+      };
+
       const moveSelect = card.querySelector('.select-folder-move');
       if (moveSelect) {
         moveSelect.onchange = async (e) => {
           const targetFolderId = e.target.value;
           if (targetFolderId) {
             const targetFolder = allFolders.find(f => f.id === targetFolderId);
-            await YTFolderStorage.removeChannelFromFolder(folder.id, ch.id);
-            await YTFolderStorage.addChannelToFolder(targetFolderId, ch);
+            await YTFolderStorage.batchMoveChannels(folder.id, targetFolderId, [ch.id || ch.handle]);
             showToast(`已將「${ch.name || ch.handle || ch.id}」移至「${targetFolder?.name || '分組'}」`);
             await loadData();
           }
         };
       }
 
-      card.querySelector('.btn-remove-channel').onclick = async () => {
+      card.querySelector('.btn-remove-channel').onclick = async (e) => {
+        e.stopPropagation();
         await YTFolderStorage.removeChannelFromFolder(folder.id, ch.id);
         showToast(`已自「${folder.name}」移除「${ch.name || ch.handle || ch.id}」`);
         await loadData();
       };
 
-      channelsGridEl.appendChild(card);
+      fragment.appendChild(card);
     });
+    channelsGridEl.appendChild(fragment);
   }
 
   // ---------------------------------------------------------------------------
@@ -456,6 +667,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     modalInputName.value = '';
     modalInputIcon.value = '📁';
     modalInputDesc.value = '';
+    if (modalInputKeywords) modalInputKeywords.value = '';
     folderModal.classList.add('show');
     modalInputName.focus();
   }
@@ -466,6 +678,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     modalInputName.value = folder.name || '';
     modalInputIcon.value = folder.icon || '📁';
     modalInputDesc.value = folder.description || '';
+    if (modalInputKeywords) {
+      modalInputKeywords.value = Array.isArray(folder.autoKeywords) ? folder.autoKeywords.join(', ') : '';
+    }
     folderModal.classList.add('show');
     modalInputName.focus();
   }
@@ -478,6 +693,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const name = modalInputName.value.trim();
     const icon = modalInputIcon.value.trim() || '📁';
     const description = modalInputDesc.value.trim();
+    const keywordsRaw = modalInputKeywords ? modalInputKeywords.value : '';
+    const autoKeywords = keywordsRaw.split(/[,，\n]/).map(k => k.trim()).filter(Boolean);
 
     if (!name) {
       alert('請輸入分組名稱');
@@ -485,9 +702,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (editingFolderId) {
-      await YTFolderStorage.updateFolder(editingFolderId, { name, icon, description });
+      await YTFolderStorage.updateFolder(editingFolderId, { name, icon, description, autoKeywords });
     } else {
-      const newFolder = await YTFolderStorage.addFolder({ name, icon, description });
+      const newFolder = await YTFolderStorage.addFolder({ name, icon, description, autoKeywords });
       activeFolderId = newFolder.id;
     }
 
@@ -631,6 +848,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnCheckUnsubscribed.onclick = handleCheckUnsubscribedChannels;
   }
 
+  if (btnCloudSync) {
+    btnCloudSync.onclick = async () => {
+      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.sync) {
+        alert('此瀏覽器環境不支援 chrome.storage.sync 雲端同步。');
+        return;
+      }
+      const choice = confirm('☁️ Chrome 雲端分組骨架同步 (chrome.storage.sync)：\n\n確定要立即與 Chrome 雲端雙向合併同步？\n系統將自動合併本機與雲端最新分組與頻道，保持多裝置一致。');
+      if (!choice) return;
+
+      showToast('☁️ 正在與 Chrome 雲端雙向同步分組骨架...');
+      const res = await YTFolderStorage.syncWithCloud('auto');
+      if (res && res.success) {
+        await loadData();
+        showToast(`☁️ 成功完成雲端同步！共 ${res.count} 個分組 (${res.channelIdCount || 0} 個頻道標識)`);
+      } else {
+        alert('雲端同步失敗: ' + (res?.error || res?.reason || '超出配額或儲存錯誤'));
+      }
+    };
+  }
+
   btnImportBackup.onclick = () => {
     importFileInput.value = '';
     importTextarea.value = '';
@@ -696,7 +933,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const selectedMap = new Map();
       unsubscribedChannels.forEach((ch, idx) => {
         const key = ch.id || ch.handle || `ch_${idx}`;
-        selectedMap.set(key, true);
+        selectedMap.set(key, false);
       });
 
       function updateUI() {
@@ -724,7 +961,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         ).join('');
 
         row.innerHTML = `
-          <input type="checkbox" class="unsub-channel-checkbox" id="cleanup-chk-${idx}" checked />
+          <input type="checkbox" class="unsub-channel-checkbox" id="cleanup-chk-${idx}" />
           <img class="unsub-channel-avatar" src="${escapeHtml(ch.avatarUrl || DEFAULT_AVATAR)}" data-default-src="${escapeHtml(DEFAULT_AVATAR)}" alt="" />
           <div class="unsub-channel-info">
             <div style="display: flex; align-items: center; justify-content: space-between;">
@@ -815,6 +1052,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (!subsData || !subsData.isLoggedIn) {
       alert('⚠️ 未能檢測到 YouTube 登入狀態。\n請確認您已在瀏覽器中登入 YouTube，或於新分頁開啟 YouTube 後重試。');
+      return;
+    }
+
+    // Task 2 Integrity Guard: Abort if pagination was incomplete to protect user data from accidental purging
+    if (subsData.isComplete === false) {
+      alert('⚠️ YouTube 訂閱清單載入不完整（可能因網路超時或分頁中斷）。\n為保護您的分組資料避免誤刪，已安全中止退訂檢查，請稍後重試。');
       return;
     }
 
@@ -1090,8 +1333,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         try {
-          // Compare against live YouTube subscriptions
-          const cmp = await YTSubscriptionService.compareSubscriptions(res.channelsList || []);
+          if (typeof YTSubscriptionService !== 'undefined' && typeof YTSubscriptionService.acquireExecutionTab === 'function') {
+            activeSharedTabContext = await YTSubscriptionService.acquireExecutionTab();
+          }
+
+          // Compare against live YouTube subscriptions reusing shared execution tab
+          const cmp = await YTSubscriptionService.compareSubscriptions(res.channelsList || [], { tabContext: activeSharedTabContext });
 
           if (!cmp.isLoggedIn) {
             autoSubSummary = `\n• YouTube 訂閱同步：未檢測到登入狀態，頻道已全部成功加入分組，但未能自動於 YouTube 同步訂閱（登入後可使用「一鍵同步」）。`;
@@ -1107,6 +1354,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const batchResult = await YTSubscriptionService.batchSubscribeWithProgress(cmp.unsubscribed, {
                   delayMs: 500,
                   shouldAbort: () => isSubscribeAborted,
+                  tabContext: activeSharedTabContext,
                   onProgress: ({ index, total, displayName, status }) => {
                     const pct = Math.round((index / total) * 100);
                     progressModalBar.style.width = `${pct}%`;
@@ -1149,7 +1397,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             // --- Part B: Check redundant subscriptions (absent from backup, still subscribed on YouTube) ---
             if (optCheckUnsubscribed && !isSubscribeAborted) {
-              if (cmp.redundantSubscribed.length === 0) {
+              if (cmp.isComplete === false) {
+                unsubSummary = `\n• YouTube 訂閱清理：⚠️ YouTube 訂閱清單載入不完整（可能因網路超時或分頁中斷），為保護您的訂閱安全，已自動略過取消訂閱步驟。`;
+              } else if (cmp.redundantSubscribed.length === 0) {
                 unsubSummary = `\n• YouTube 訂閱清理：已訂閱頻道全部與備份一致，無已刪除之多餘訂閱。`;
               } else {
                 // Temporarily hide progress modal to let user choose channels to unsubscribe
@@ -1174,6 +1424,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                   const unsubBatchResult = await YTSubscriptionService.batchUnsubscribeWithProgress(channelsToUnsubscribe, {
                     delayMs: 500,
                     shouldAbort: () => isSubscribeAborted,
+                    tabContext: activeSharedTabContext,
                     onProgress: ({ index, total, displayName, status }) => {
                       const pct = Math.round((index / total) * 100);
                       progressModalBar.style.width = `${pct}%`;
@@ -1209,6 +1460,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           console.error('[Options] Subscription sync error:', subErr);
           autoSubSummary = `\n• YouTube 訂閱同步：比對時發生問題 (${subErr.message})，頻道已成功匯入分組。`;
         } finally {
+          if (activeSharedTabContext && typeof YTSubscriptionService.releaseExecutionTab === 'function') {
+            await YTSubscriptionService.releaseExecutionTab(activeSharedTabContext);
+            activeSharedTabContext = null;
+          }
           if (subscribeProgressModal) {
             subscribeProgressModal.classList.remove('show');
           }
@@ -1286,6 +1541,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
   }
+
+  window.addEventListener('pagehide', () => {
+    isSubscribeAborted = true;
+    if (activeSharedTabContext && typeof YTSubscriptionService !== 'undefined' && typeof YTSubscriptionService.releaseExecutionTab === 'function') {
+      YTSubscriptionService.releaseExecutionTab(activeSharedTabContext);
+      activeSharedTabContext = null;
+    }
+  });
 
   // Initial Load
   await loadData();

@@ -19,7 +19,8 @@ const YTFolderStorage = (() => {
     showInSidebar: true,
     showFeedFilter: true,
     activeFeedFolderId: 'all',
-    expandedFolders: {}
+    expandedFolders: {},
+    dismissedOnboarding: false
   };
 
   function normalizeHandle(h) {
@@ -51,10 +52,13 @@ const YTFolderStorage = (() => {
 
   function sanitizeAvatarUrl(url) {
     if (!url || typeof url !== 'string') return '';
-    const trimmed = url.trim();
+    let trimmed = url.trim();
     if (/[\s<>"'`]/.test(trimmed)) return '';
     if (/^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,[a-zA-Z0-9+/=]+$/i.test(trimmed)) {
       return trimmed;
+    }
+    if (/^\/\/(?:yt3\.googleusercontent\.com|yt3\.ggpht\.com)\//i.test(trimmed)) {
+      trimmed = 'https:' + trimmed;
     }
     if (/^https?:\/\//i.test(trimmed)) {
       try {
@@ -79,10 +83,48 @@ const YTFolderStorage = (() => {
     return clean ? clean.slice(0, 10) : '📁';
   }
 
+  const LEADING_EMOJI_RE = /^((?:[\u{1F1E6}-\u{1F1FF}]{2})|(?:(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\uFE0F)?(?:\u200D(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\uFE0F)?)*))\s*/u;
+
+  function normalizeFolderIconAndName(rawName, rawIcon) {
+    let name = String(rawName || '').trim();
+    let icon = sanitizeFolderIcon(rawIcon);
+    const hasExplicitCustomIcon = Boolean(rawIcon && String(rawIcon).trim() && sanitizeFolderIcon(rawIcon) !== '📁');
+
+    const match = name.match(LEADING_EMOJI_RE);
+    if (match) {
+      const leadEmoji = match[1];
+      if (!hasExplicitCustomIcon || icon === leadEmoji) {
+        icon = sanitizeFolderIcon(leadEmoji);
+      }
+      if (icon === leadEmoji) {
+        while (true) {
+          const m = name.match(LEADING_EMOJI_RE);
+          if (m && m[1] === leadEmoji) {
+            const stripped = name.slice(m[0].length).trim();
+            if (stripped.length > 0) {
+              name = stripped;
+              continue;
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    if (icon && name.startsWith(icon)) {
+      const stripped = name.slice(icon.length).trim();
+      if (stripped.length > 0) {
+        name = stripped;
+      }
+    }
+
+    return { icon, name };
+  }
+
   function sanitizeSettings(incoming) {
     if (!incoming || typeof incoming !== 'object') return {};
     const safe = {};
-    const validKeys = ['hideWatched', 'hideShorts', 'onlyLive', 'showInSidebar', 'showFeedFilter', 'activeFeedFolderId', 'expandedFolders'];
+    const validKeys = ['hideWatched', 'hideShorts', 'onlyLive', 'showInSidebar', 'showFeedFilter', 'activeFeedFolderId', 'expandedFolders', 'dismissedOnboarding'];
     for (const key of validKeys) {
       if (key in incoming && key !== '__proto__' && key !== 'constructor' && key !== 'prototype') {
         if (key === 'expandedFolders') {
@@ -102,23 +144,11 @@ const YTFolderStorage = (() => {
     return safe;
   }
 
-  // Re-entrant async mutex lock to prevent concurrent Read-Modify-Write race conditions
+  // Strict FIFO async mutex lock to prevent concurrent Read-Modify-Write race conditions
   let storageMutex = Promise.resolve();
-  let lockDepth = 0;
 
   function withStorageLock(taskFn) {
-    if (lockDepth > 0) {
-      return taskFn();
-    }
-    const run = async () => {
-      lockDepth++;
-      try {
-        return await taskFn();
-      } finally {
-        lockDepth--;
-      }
-    };
-    const next = storageMutex.then(run, run);
+    const next = storageMutex.then(() => taskFn(), () => taskFn());
     storageMutex = next.catch(() => {});
     return next;
   }
@@ -142,87 +172,118 @@ const YTFolderStorage = (() => {
     return { channels: [], folders: [] };
   }
 
-  // Initialize data from bundled YT_INITIAL_DATA
-  async function init(force = false) {
-    return withStorageLock(async () => {
-      const raw = await getRaw([STORAGE_KEYS.INITIALIZED, STORAGE_KEYS.FOLDERS, STORAGE_KEYS.CHANNELS]);
+  // Unlocked initialization logic
+  async function _initUnlocked(force = false) {
+    const raw = await getRaw([STORAGE_KEYS.INITIALIZED, STORAGE_KEYS.FOLDERS, STORAGE_KEYS.CHANNELS]);
 
-      // If already initialized once and not force-resetting, respect existing user data (even if empty)
-      if (!force && raw[STORAGE_KEYS.INITIALIZED]) {
-        return;
-      }
+    // If already initialized once and not force-resetting, respect existing user data (even if empty)
+    if (!force && raw[STORAGE_KEYS.INITIALIZED]) {
+      return;
+    }
 
-      try {
-        const data = getFallbackData();
+    try {
+      const data = getFallbackData();
 
-        const channelsMap = {};
-        if (Array.isArray(data.channels)) {
-          for (const ch of data.channels) {
-            if (ch && (ch.id || ch.handle)) {
-              const id = ch.id || ch.handle;
-              channelsMap[id] = {
-                id: id,
-                name: ch.name || ch.handle || '',
-                handle: ch.handle || '',
-                avatarUrl: sanitizeAvatarUrl(ch.avatarUrl)
-              };
-            }
+      const channelsMap = {};
+      if (Array.isArray(data.channels)) {
+        for (const ch of data.channels) {
+          if (ch && (ch.id || ch.handle)) {
+            const id = ch.id || ch.handle;
+            channelsMap[id] = {
+              id: id,
+              name: ch.name || ch.handle || '',
+              handle: ch.handle || '',
+              avatarUrl: sanitizeAvatarUrl(ch.avatarUrl)
+            };
           }
         }
-
-        const folders = [];
-        const defaultColors = [
-          '#f44336', '#e91e63', '#9c27b0', '#673ab7', '#3f51b5',
-          '#2196f3', '#009688', '#4caf50', '#ff9800', '#795548'
-        ];
-
-        if (Array.isArray(data.folders)) {
-          data.folders.forEach((f, idx) => {
-            const emojiMatch = f.name.match(/^(\p{Extended_Pictographic}|\p{Emoji_Presentation})/u);
-            const icon = emojiMatch ? emojiMatch[0] : '📁';
-            folders.push({
-              id: f.id || `folder_${Date.now()}_${idx}`,
-              name: f.name || `Folder ${idx + 1}`,
-              description: f.description || '',
-              icon: icon,
-              color: defaultColors[idx % defaultColors.length],
-              channels: Array.isArray(f.channels) ? f.channels : []
-            });
-          });
-        }
-
-        await setRaw({
-          [STORAGE_KEYS.FOLDERS]: folders,
-          [STORAGE_KEYS.CHANNELS]: channelsMap,
-          [STORAGE_KEYS.SETTINGS]: DEFAULT_SETTINGS,
-          [STORAGE_KEYS.INITIALIZED]: true
-        });
-        console.log(`[YTFolderStorage] Initialized ${folders.length} folders & ${Object.keys(channelsMap).length} channels.`);
-      } catch (err) {
-        console.error('[YTFolderStorage] Error initializing data:', err);
       }
-    });
+
+      const folders = [];
+      const defaultColors = [
+        '#f44336', '#e91e63', '#9c27b0', '#673ab7', '#3f51b5',
+        '#2196f3', '#009688', '#4caf50', '#ff9800', '#795548'
+      ];
+
+      if (Array.isArray(data.folders)) {
+        data.folders.forEach((f, idx) => {
+          const normalized = normalizeFolderIconAndName(f.name || `Folder ${idx + 1}`, f.icon);
+          folders.push({
+            id: f.id || `folder_${Date.now()}_${idx}`,
+            name: normalized.name,
+            description: f.description || '',
+            icon: normalized.icon,
+            color: defaultColors[idx % defaultColors.length],
+            autoKeywords: Array.isArray(f.autoKeywords) ? f.autoKeywords : [],
+            channels: Array.isArray(f.channels) ? f.channels : []
+          });
+        });
+      }
+
+      await setRaw({
+        [STORAGE_KEYS.FOLDERS]: folders,
+        [STORAGE_KEYS.CHANNELS]: channelsMap,
+        [STORAGE_KEYS.SETTINGS]: DEFAULT_SETTINGS,
+        [STORAGE_KEYS.INITIALIZED]: true
+      });
+      console.log(`[YTFolderStorage] Initialized ${folders.length} folders & ${Object.keys(channelsMap).length} channels.`);
+    } catch (err) {
+      console.error('[YTFolderStorage] Error initializing data:', err);
+    }
   }
 
-  async function getFolders() {
+  // Initialize data from bundled YT_INITIAL_DATA
+  async function init(force = false) {
+    return withStorageLock(() => _initUnlocked(force));
+  }
+
+  async function _getFoldersUnlocked() {
     let raw = await getRaw([STORAGE_KEYS.FOLDERS, STORAGE_KEYS.INITIALIZED]);
     let folders = raw[STORAGE_KEYS.FOLDERS];
     if (!raw[STORAGE_KEYS.INITIALIZED] && (!folders || !Array.isArray(folders))) {
-      await init(false);
+      await _initUnlocked(false);
       raw = await getRaw([STORAGE_KEYS.FOLDERS]);
       folders = raw[STORAGE_KEYS.FOLDERS] || [];
     }
-    return Array.isArray(folders) ? folders : [];
+    if (!Array.isArray(folders)) return [];
+
+    // Auto-heal any stored folders that have duplicate leading emoji in name/icon
+    let mutated = false;
+    for (const f of folders) {
+      if (!f || typeof f !== 'object') continue;
+      const normalized = normalizeFolderIconAndName(f.name, f.icon);
+      if (normalized.name !== f.name || normalized.icon !== f.icon) {
+        f.name = normalized.name;
+        f.icon = normalized.icon;
+        mutated = true;
+      }
+      if (!Array.isArray(f.autoKeywords)) {
+        if (typeof f.autoKeywords === 'string' && f.autoKeywords.trim()) {
+          f.autoKeywords = f.autoKeywords.split(/[,，\n]/).map(k => k.trim()).filter(Boolean);
+          mutated = true;
+        } else {
+          f.autoKeywords = [];
+        }
+      }
+    }
+
+    return folders;
+  }
+
+  async function getFolders() {
+    return await _getFoldersUnlocked();
+  }
+
+  async function _setFoldersUnlocked(folders) {
+    await setRaw({ [STORAGE_KEYS.FOLDERS]: folders });
+    notifyChange();
   }
 
   async function setFolders(folders) {
-    return withStorageLock(async () => {
-      await setRaw({ [STORAGE_KEYS.FOLDERS]: folders });
-      notifyChange();
-    });
+    return withStorageLock(() => _setFoldersUnlocked(folders));
   }
 
-  async function getChannels() {
+  async function _getChannelsUnlocked() {
     let raw = await getRaw([STORAGE_KEYS.CHANNELS, STORAGE_KEYS.INITIALIZED]);
     let channels = raw[STORAGE_KEYS.CHANNELS];
 
@@ -241,11 +302,10 @@ const YTFolderStorage = (() => {
         }
       });
       channels = map;
-      await setRaw({ [STORAGE_KEYS.CHANNELS]: channels });
     }
 
     if (!raw[STORAGE_KEYS.INITIALIZED] && (!channels || typeof channels !== 'object')) {
-      await init(false);
+      await _initUnlocked(false);
       raw = await getRaw([STORAGE_KEYS.CHANNELS]);
       channels = raw[STORAGE_KEYS.CHANNELS] || {};
     }
@@ -262,19 +322,22 @@ const YTFolderStorage = (() => {
           hasInvalid = true;
         }
       }
-      if (hasInvalid) {
-        await setRaw({ [STORAGE_KEYS.CHANNELS]: channels });
-      }
     }
 
     return (channels && typeof channels === 'object') ? channels : {};
   }
 
+  async function getChannels() {
+    return await _getChannelsUnlocked();
+  }
+
+  async function _setChannelsUnlocked(channels) {
+    await setRaw({ [STORAGE_KEYS.CHANNELS]: channels });
+    notifyChange();
+  }
+
   async function setChannels(channels) {
-    return withStorageLock(async () => {
-      await setRaw({ [STORAGE_KEYS.CHANNELS]: channels });
-      notifyChange();
-    });
+    return withStorageLock(() => _setChannelsUnlocked(channels));
   }
 
   async function getSettings() {
@@ -292,44 +355,79 @@ const YTFolderStorage = (() => {
     });
   }
 
-  async function addFolder({ name, icon = '📁', color = '#2196f3', description = '' }) {
+  async function addFolder({ name, icon = '📁', color = '#2196f3', description = '', autoKeywords = [] }) {
     return withStorageLock(async () => {
-      const folders = await getFolders();
+      const folders = await _getFoldersUnlocked();
+      const normalized = normalizeFolderIconAndName(name, icon);
+      const safeKeywords = Array.isArray(autoKeywords)
+        ? autoKeywords.map(k => String(k).trim()).filter(Boolean)
+        : (typeof autoKeywords === 'string' ? autoKeywords.split(/[,，\n]/).map(k => k.trim()).filter(Boolean) : []);
       const newFolder = {
         id: `folder_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        name: String(name || '').trim(),
-        icon: sanitizeFolderIcon(icon),
+        name: normalized.name,
+        icon: normalized.icon,
         color: sanitizeFolderColor(color),
         description: String(description || '').trim(),
+        autoKeywords: safeKeywords,
         channels: []
       };
       folders.push(newFolder);
-      await setFolders(folders);
+      await _setFoldersUnlocked(folders);
       return newFolder;
     });
   }
 
   async function updateFolder(id, changes) {
     return withStorageLock(async () => {
-      const folders = await getFolders();
+      const folders = await _getFoldersUnlocked();
       const idx = folders.findIndex(f => f.id === id);
       if (idx === -1) return null;
       const safeChanges = { ...changes };
-      if (safeChanges.icon !== undefined) safeChanges.icon = sanitizeFolderIcon(safeChanges.icon);
       if (safeChanges.color !== undefined) safeChanges.color = sanitizeFolderColor(safeChanges.color);
-      if (safeChanges.name !== undefined) safeChanges.name = String(safeChanges.name).trim();
       if (safeChanges.description !== undefined) safeChanges.description = String(safeChanges.description).trim();
+      if (safeChanges.autoKeywords !== undefined) {
+        safeChanges.autoKeywords = Array.isArray(safeChanges.autoKeywords)
+          ? safeChanges.autoKeywords.map(k => String(k).trim()).filter(Boolean)
+          : (typeof safeChanges.autoKeywords === 'string' ? safeChanges.autoKeywords.split(/[,，\n]/).map(k => k.trim()).filter(Boolean) : []);
+      }
+      if (safeChanges.name !== undefined || safeChanges.icon !== undefined) {
+        const nextRawName = safeChanges.name !== undefined ? safeChanges.name : folders[idx].name;
+        const nextRawIcon = safeChanges.icon !== undefined ? safeChanges.icon : folders[idx].icon;
+        const normalized = normalizeFolderIconAndName(nextRawName, nextRawIcon);
+        safeChanges.name = normalized.name;
+        safeChanges.icon = normalized.icon;
+      }
       folders[idx] = Object.assign({}, folders[idx], safeChanges);
-      await setFolders(folders);
+      await _setFoldersUnlocked(folders);
       return folders[idx];
     });
   }
 
   async function deleteFolder(id) {
     return withStorageLock(async () => {
-      const folders = await getFolders();
+      const folders = await _getFoldersUnlocked();
       const filtered = folders.filter(f => f.id !== id);
-      await setFolders(filtered);
+      await _setFoldersUnlocked(filtered);
+      return true;
+    });
+  }
+
+  async function reorderFolders(newOrderIds) {
+    return withStorageLock(async () => {
+      const folders = await _getFoldersUnlocked();
+      const folderMap = new Map(folders.map(f => [f.id, f]));
+      const reordered = [];
+      for (const id of newOrderIds) {
+        if (folderMap.has(id)) {
+          reordered.push(folderMap.get(id));
+          folderMap.delete(id);
+        }
+      }
+      for (const remaining of folderMap.values()) {
+        reordered.push(remaining);
+      }
+      await _setFoldersUnlocked(reordered);
+      return reordered;
     });
   }
 
@@ -525,10 +623,11 @@ const YTFolderStorage = (() => {
         }
       }
 
+      const normalizedFolder = normalizeFolderIconAndName(f.name || `Folder ${cleanFolders.length + 1}`, f.icon);
       cleanFolders.push({
         id: String(f.id || `folder_${Date.now()}_${cleanFolders.length}`).trim(),
-        name: String(f.name || `Folder ${cleanFolders.length + 1}`).trim(),
-        icon: sanitizeFolderIcon(f.icon),
+        name: normalizedFolder.name,
+        icon: normalizedFolder.icon,
         color: sanitizeFolderColor(f.color),
         description: String(f.description || '').trim(),
         channels: fChannels
@@ -589,87 +688,285 @@ const YTFolderStorage = (() => {
   // ---------------------------------------------------------------------------
   // Channel CRUD & Management
   // ---------------------------------------------------------------------------
+  async function _addChannelToFolderUnlocked(folderId, channelInfo) {
+    const folders = await _getFoldersUnlocked();
+    const channels = await _getChannelsUnlocked();
+
+    const folder = folders.find(f => f.id === folderId);
+    if (!folder) return false;
+
+    const chId = channelInfo.id || channelInfo.handle;
+    if (!chId) return false;
+
+    // Check if channel already exists under an alias or handle
+    let canonicalId = chId;
+    const chNorm = normalizeHandle(chId);
+    const existing = Object.values(channels).find(c =>
+      (c.id && c.id.toLowerCase() === chId.toLowerCase()) ||
+      (c.handle && normalizeHandle(c.handle) === chNorm)
+    );
+    if (existing) {
+      canonicalId = existing.id || chId;
+    }
+
+    if (!Array.isArray(folder.channels)) {
+      folder.channels = [];
+    }
+
+    // Ensure no duplicate in this folder
+    const alreadyInFolder = folder.channels.some(id =>
+      id.toLowerCase() === canonicalId.toLowerCase() ||
+      (existing?.handle && normalizeHandle(id) === normalizeHandle(existing.handle))
+    );
+
+    if (!alreadyInFolder) {
+      folder.channels.push(canonicalId);
+    }
+
+    channels[canonicalId] = {
+      id: canonicalId,
+      name: channelInfo.name || existing?.name || canonicalId,
+      handle: channelInfo.handle || existing?.handle || (canonicalId.startsWith('@') ? canonicalId : ''),
+      avatarUrl: sanitizeAvatarUrl(channelInfo.avatarUrl) || sanitizeAvatarUrl(existing?.avatarUrl) || '',
+      isSubscribed: channelInfo.isSubscribed !== undefined ? Boolean(channelInfo.isSubscribed) : (existing?.isSubscribed !== false)
+    };
+
+    await setRaw({
+      [STORAGE_KEYS.FOLDERS]: folders,
+      [STORAGE_KEYS.CHANNELS]: channels
+    });
+    notifyChange();
+    return true;
+  }
+
   async function addChannelToFolder(folderId, channelInfo) {
-    return withStorageLock(async () => {
-      const folders = await getFolders();
-      const channels = await getChannels();
+    return withStorageLock(() => _addChannelToFolderUnlocked(folderId, channelInfo));
+  }
 
-      const folder = folders.find(f => f.id === folderId);
-      if (!folder) return false;
+  async function _removeChannelFromFolderUnlocked(folderId, channelId) {
+    const folders = await _getFoldersUnlocked();
+    const channels = await _getChannelsUnlocked();
+    const folder = folders.find(f => f.id === folderId);
+    if (!folder || !Array.isArray(folder.channels)) return false;
 
-      const chId = channelInfo.id || channelInfo.handle;
-      if (!chId) return false;
+    const normTarget = normalizeHandle(channelId);
+    const targetLower = (channelId || '').toLowerCase();
 
-      // Check if channel already exists under an alias or handle
-      let canonicalId = chId;
-      const chNorm = normalizeHandle(chId);
-      const existing = Object.values(channels).find(c =>
-        (c.id && c.id.toLowerCase() === chId.toLowerCase()) ||
-        (c.handle && normalizeHandle(c.handle) === chNorm)
-      );
-      if (existing) {
-        canonicalId = existing.id || chId;
+    folder.channels = folder.channels.filter(id => {
+      if (!id) return false;
+      if (id === channelId) return false;
+      if (id.toLowerCase() === targetLower) return false;
+      if (normTarget && normalizeHandle(id) === normTarget) return false;
+
+      // Cross-reference via channels dictionary
+      const ch = channels[id];
+      if (ch) {
+        if (targetLower && ch.id && ch.id.toLowerCase() === targetLower) return false;
+        if (normTarget && ch.handle && normalizeHandle(ch.handle) === normTarget) return false;
       }
-
-      if (!Array.isArray(folder.channels)) {
-        folder.channels = [];
-      }
-
-      // Ensure no duplicate in this folder
-      const alreadyInFolder = folder.channels.some(id =>
-        id.toLowerCase() === canonicalId.toLowerCase() ||
-        (existing?.handle && normalizeHandle(id) === normalizeHandle(existing.handle))
-      );
-
-      if (!alreadyInFolder) {
-        folder.channels.push(canonicalId);
-      }
-
-      channels[canonicalId] = {
-        id: canonicalId,
-        name: channelInfo.name || existing?.name || canonicalId,
-        handle: channelInfo.handle || existing?.handle || (canonicalId.startsWith('@') ? canonicalId : ''),
-        avatarUrl: sanitizeAvatarUrl(channelInfo.avatarUrl) || sanitizeAvatarUrl(existing?.avatarUrl) || '',
-        isSubscribed: channelInfo.isSubscribed !== undefined ? Boolean(channelInfo.isSubscribed) : (existing?.isSubscribed !== false)
-      };
-
-      await setRaw({
-        [STORAGE_KEYS.FOLDERS]: folders,
-        [STORAGE_KEYS.CHANNELS]: channels
-      });
-      notifyChange();
       return true;
     });
+
+    await _setFoldersUnlocked(folders);
+    return true;
   }
 
   async function removeChannelFromFolder(folderId, channelId) {
-    return withStorageLock(async () => {
-      const folders = await getFolders();
-      const channels = await getChannels();
-      const folder = folders.find(f => f.id === folderId);
-      if (!folder || !Array.isArray(folder.channels)) return false;
+    return withStorageLock(() => _removeChannelFromFolderUnlocked(folderId, channelId));
+  }
 
-      const normTarget = normalizeHandle(channelId);
-      const targetLower = (channelId || '').toLowerCase();
+  function _buildChannelMatcher(channelKeys, channels) {
+    const lowerIds = new Set();
+    const normHandles = new Set();
 
-      folder.channels = folder.channels.filter(id => {
-        if (!id) return false;
-        if (id === channelId) return false;
-        if (id.toLowerCase() === targetLower) return false;
-        if (normTarget && normalizeHandle(id) === normTarget) return false;
+    channelKeys.forEach(k => {
+      if (!k) return;
+      const strK = String(k).trim();
+      lowerIds.add(strK.toLowerCase());
+      const nh = normalizeHandle(strK);
+      if (nh) normHandles.add(nh);
 
-        // Cross-reference via channels dictionary
-        const ch = channels[id];
-        if (ch) {
-          if (targetLower && ch.id && ch.id.toLowerCase() === targetLower) return false;
-          if (normTarget && ch.handle && normalizeHandle(ch.handle) === normTarget) return false;
+      // Cross-reference channels dictionary
+      let ch = channels[strK];
+      if (!ch) {
+        ch = Object.values(channels).find(c =>
+          (c.id && c.id.toLowerCase() === strK.toLowerCase()) ||
+          (c.handle && normalizeHandle(c.handle) === nh)
+        );
+      }
+      if (ch) {
+        if (ch.id) lowerIds.add(ch.id.toLowerCase());
+        if (ch.handle) {
+          const cnh = normalizeHandle(ch.handle);
+          if (cnh) normHandles.add(cnh);
         }
-        return true;
-      });
-
-      await setFolders(folders);
-      return true;
+      }
     });
+
+    const isMatch = (cid) => {
+      if (!cid) return false;
+      const cStr = String(cid).trim();
+      const cLower = cStr.toLowerCase();
+      if (lowerIds.has(cLower)) return true;
+      const cNormH = normalizeHandle(cStr);
+      if (cNormH && normHandles.has(cNormH)) return true;
+
+      const ch = channels[cStr];
+      if (ch) {
+        if (ch.id && lowerIds.has(ch.id.toLowerCase())) return true;
+        if (ch.handle && normHandles.has(normalizeHandle(ch.handle))) return true;
+      }
+      return false;
+    };
+
+    return { lowerIds, normHandles, isMatch };
+  }
+
+  /**
+   * Atomically moves a batch of channels into a target folder and optionally removes them from source folder.
+   */
+  async function batchMoveChannels(sourceFolderId, targetFolderId, channelKeys) {
+    if (!targetFolderId || !Array.isArray(channelKeys) || channelKeys.length === 0) {
+      return { success: false, movedCount: 0 };
+    }
+    return withStorageLock(async () => {
+      const folders = await _getFoldersUnlocked();
+      const channels = await _getChannelsUnlocked();
+      const targetFolder = folders.find(f => f.id === targetFolderId);
+      if (!targetFolder) return { success: false, movedCount: 0 };
+      if (!Array.isArray(targetFolder.channels)) targetFolder.channels = [];
+
+      const sourceFolder = (sourceFolderId && sourceFolderId !== '__uncategorized__')
+        ? folders.find(f => f.id === sourceFolderId)
+        : null;
+
+      const { isMatch } = _buildChannelMatcher(channelKeys, channels);
+
+      let movedCount = 0;
+      for (const k of channelKeys) {
+        const strK = String(k).trim();
+        let ch = channels[strK];
+        if (!ch) {
+          const nh = normalizeHandle(strK);
+          ch = Object.values(channels).find(c =>
+            (c.id && c.id.toLowerCase() === strK.toLowerCase()) ||
+            (c.handle && normalizeHandle(c.handle) === nh)
+          );
+        }
+        const canonicalId = (ch && ch.id && ch.id.startsWith('UC')) ? ch.id : (ch?.id || strK);
+
+        const existsInTarget = targetFolder.channels.some(cid => {
+          if (cid === canonicalId) return true;
+          const singleMatcher = _buildChannelMatcher([canonicalId], channels);
+          return singleMatcher.isMatch(cid);
+        });
+
+        if (!existsInTarget) {
+          targetFolder.channels.push(canonicalId);
+          movedCount++;
+        }
+      }
+
+      if (sourceFolder && Array.isArray(sourceFolder.channels)) {
+        sourceFolder.channels = sourceFolder.channels.filter(cid => !isMatch(cid));
+      }
+
+      await _setFoldersUnlocked(folders);
+      return { success: true, movedCount };
+    });
+  }
+
+  /**
+   * Atomically removes a batch of channels from a single folder.
+   */
+  async function batchRemoveChannelsFromFolder(folderId, channelKeys) {
+    if (!folderId || !Array.isArray(channelKeys) || channelKeys.length === 0) {
+      return { success: false, removedCount: 0 };
+    }
+    return withStorageLock(async () => {
+      const folders = await _getFoldersUnlocked();
+      const channels = await _getChannelsUnlocked();
+      const folder = folders.find(f => f.id === folderId);
+      if (!folder || !Array.isArray(folder.channels)) return { success: false, removedCount: 0 };
+
+      const { isMatch } = _buildChannelMatcher(channelKeys, channels);
+
+      const prevCount = folder.channels.length;
+      folder.channels = folder.channels.filter(cid => !isMatch(cid));
+
+      const removedCount = prevCount - folder.channels.length;
+      await _setFoldersUnlocked(folders);
+      return { success: true, removedCount };
+    });
+  }
+
+  /**
+   * Helper to determine if two channel representations are conclusively distinct entities
+   * (e.g. they possess two different verified UC IDs or two different non-empty handles).
+   */
+  function isDistinctChannel(targetId, targetHandle, candidateId, candidateHandle) {
+    const tId = String(targetId || '').trim();
+    const cId = String(candidateId || '').trim();
+    if (tId && cId && tId.startsWith('UC') && cId.startsWith('UC') && tId.toLowerCase() !== cId.toLowerCase()) {
+      return true; // Two distinct verified UC IDs
+    }
+    const tH = normalizeHandle(targetHandle || (tId.startsWith('@') ? tId : ''));
+    const cH = normalizeHandle(candidateHandle || (cId.startsWith('@') ? cId : ''));
+    if (tH && cH && tH !== cH) {
+      return true; // Two distinct handles
+    }
+    return false;
+  }
+
+  /**
+   * Checks if a channel name or handle matches any defined folder autoKeywords
+   */
+  function matchesAutoKeywords(channelOrName, channelHandleOrKeywords, maybeKeywords) {
+    let channelName = '';
+    let channelHandle = '';
+    let rawKeywords = null;
+
+    let channelDesc = '';
+
+    if (channelOrName && typeof channelOrName === 'object') {
+      channelName = channelOrName.name || channelOrName.title || '';
+      channelHandle = channelOrName.handle || '';
+      channelDesc = channelOrName.description || '';
+      rawKeywords = channelHandleOrKeywords;
+    } else {
+      channelName = channelOrName || '';
+      channelHandle = channelHandleOrKeywords || '';
+      rawKeywords = maybeKeywords;
+    }
+
+    const keywords = Array.isArray(rawKeywords)
+      ? rawKeywords
+      : (typeof rawKeywords === 'string' ? rawKeywords.split(/[,，\n]/).map(k => k.trim()).filter(Boolean) : []);
+
+    if (keywords.length === 0) return false;
+    const nameStr = String(channelName || '').toLowerCase();
+    const handleStr = String(channelHandle || '').toLowerCase().replace(/^@/, '');
+    const descStr = String(channelDesc || '').toLowerCase();
+
+    for (const kw of keywords) {
+      if (!kw || typeof kw !== 'string') continue;
+      const cleanKw = kw.trim();
+      if (!cleanKw) continue;
+      if (cleanKw.startsWith('/') && cleanKw.lastIndexOf('/') > 1) {
+        try {
+          const pattern = cleanKw.slice(1, cleanKw.lastIndexOf('/'));
+          const flags = cleanKw.slice(cleanKw.lastIndexOf('/') + 1) || 'i';
+          const re = new RegExp(pattern, flags);
+          if (re.test(channelName || '') || re.test(channelHandle || '') || re.test(channelDesc || '')) return true;
+        } catch (e) {}
+      } else {
+        const kwLower = cleanKw.toLowerCase();
+        if (nameStr.includes(kwLower) || handleStr.includes(kwLower) || (descStr && descStr.includes(kwLower))) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
@@ -680,8 +977,8 @@ const YTFolderStorage = (() => {
     if (!channelId && !channelHandle && !channelName) return { success: false, removedCount: 0, affectedFolderIds: [] };
 
     return withStorageLock(async () => {
-      const folders = await getFolders();
-      const channels = await getChannels();
+      const folders = await _getFoldersUnlocked();
+      const channels = await _getChannelsUnlocked();
 
       const normTargetHandle = normalizeHandle(channelHandle || channelId);
       const targetLower = (channelId || '').toLowerCase();
@@ -717,7 +1014,7 @@ const YTFolderStorage = (() => {
           (chIdLower && matchingIds.has(chIdLower)) ||
           (chHandleNorm && matchingIds.has(chHandleNorm)) ||
           (chHandleLower && matchingIds.has(chHandleLower)) ||
-          (nameLower && chNameLower && chNameLower === nameLower)
+          (nameLower && chNameLower && chNameLower === nameLower && !isDistinctChannel(channelId, channelHandle, ch.id, ch.handle))
         );
 
         if (isMatch) {
@@ -777,7 +1074,7 @@ const YTFolderStorage = (() => {
               const hNorm = normalizeHandle(ch.handle);
               if (hNorm && matchingIds.has(hNorm)) return false;
             }
-            if (nameLower && ch.name && ch.name.trim().toLowerCase() === nameLower) return false;
+            if (nameLower && ch.name && ch.name.trim().toLowerCase() === nameLower && !isDistinctChannel(channelId, channelHandle, ch.id, ch.handle)) return false;
           }
 
           return true;
@@ -813,8 +1110,8 @@ const YTFolderStorage = (() => {
     }
 
     return withStorageLock(async () => {
-      const folders = await getFolders();
-      const channels = await getChannels();
+      const folders = await _getFoldersUnlocked();
+      const channels = await _getChannelsUnlocked();
 
       // 1. Build a comprehensive set of tokens/IDs/handles to remove
       const matchingIds = new Set();
@@ -856,13 +1153,24 @@ const YTFolderStorage = (() => {
         const chHandleLower = (ch.handle || '').toLowerCase();
         const chNameLower = (ch.name || '').trim().toLowerCase();
 
+        let isNameMatched = false;
+        if (chNameLower && namesToPurge.has(chNameLower)) {
+          for (const item of channelsList) {
+            const iName = (item.name || '').trim().toLowerCase();
+            if (iName === chNameLower && !isDistinctChannel(item.id, item.handle, ch.id, ch.handle)) {
+              isNameMatched = true;
+              break;
+            }
+          }
+        }
+
         const isMatch = (
           matchingIds.has(kLower) ||
           (kNorm && matchingIds.has(kNorm)) ||
           (chIdLower && matchingIds.has(chIdLower)) ||
           (chHandleNorm && matchingIds.has(chHandleNorm)) ||
           (chHandleLower && matchingIds.has(chHandleLower)) ||
-          (chNameLower && namesToPurge.has(chNameLower))
+          isNameMatched
         );
 
         if (isMatch) {
@@ -914,7 +1222,13 @@ const YTFolderStorage = (() => {
               const hNorm = normalizeHandle(ch.handle);
               if (hNorm && matchingIds.has(hNorm)) return false;
             }
-            if (ch.name && namesToPurge.has(ch.name.trim().toLowerCase())) return false;
+            if (ch.name && namesToPurge.has(ch.name.trim().toLowerCase())) {
+              for (const item of channelsList) {
+                if ((item.name || '').trim().toLowerCase() === ch.name.trim().toLowerCase() && !isDistinctChannel(item.id, item.handle, ch.id, ch.handle)) {
+                  return false;
+                }
+              }
+            }
           }
 
           return true;
@@ -951,8 +1265,10 @@ const YTFolderStorage = (() => {
     }
 
     return withStorageLock(async () => {
-      const channels = await getChannels();
+      const folders = await _getFoldersUnlocked();
+      const channels = await _getChannelsUnlocked();
       let updatedCount = 0;
+      let foldersChanged = false;
 
       // Build O(1) lookup index for existing channels
       const keyByIdOrHandle = new Map();
@@ -983,6 +1299,7 @@ const YTFolderStorage = (() => {
                          (lNormHandle && keyByIdOrHandle.get(lNormHandle)) ||
                          null;
 
+        let targetObj = null;
         if (foundKey && channels[foundKey]) {
           const target = channels[foundKey];
           let changed = false;
@@ -999,7 +1316,7 @@ const YTFolderStorage = (() => {
             target.handle = lHandle.startsWith('@') ? lHandle : `@${lHandle}`;
             changed = true;
           }
-          if (lId && !target.id) {
+          if (lId && lId.startsWith('UC') && (!target.id || !target.id.startsWith('UC'))) {
             target.id = lId;
             changed = true;
           }
@@ -1007,25 +1324,56 @@ const YTFolderStorage = (() => {
             target.isSubscribed = true;
             changed = true;
           }
+          if (lId && lId.startsWith('UC') && foundKey !== lId && !channels[lId]) {
+            channels[lId] = target;
+            changed = true;
+          }
 
           if (changed) updatedCount++;
+          targetObj = target;
         } else if (lId) {
           // Channel exists in live YouTube subs but not in local channels dictionary; add it
-          channels[lId] = {
+          const newCh = {
             id: lId,
             name: lName || lHandle || lId,
             handle: lHandle ? (lHandle.startsWith('@') ? lHandle : `@${lHandle}`) : '',
             avatarUrl: lAvatar || '',
             isSubscribed: true
           };
+          channels[lId] = newCh;
           keyByIdOrHandle.set(lId.toLowerCase(), lId);
           if (lNormHandle) keyByIdOrHandle.set(lNormHandle, lId);
           updatedCount++;
+          targetObj = newCh;
+        }
+
+        // Phase 4.1: Smart Auto-Categorization based on autoKeywords
+        if (targetObj) {
+          const evalId = targetObj.id || lId;
+          const evalName = targetObj.name || lName;
+          const evalHandle = targetObj.handle || lHandle;
+          for (const f of folders) {
+            const kwList = Array.isArray(f.autoKeywords)
+              ? f.autoKeywords
+              : (typeof f.autoKeywords === 'string' ? f.autoKeywords.split(/[,，\n]/).map(k => k.trim()).filter(Boolean) : []);
+            if (kwList.length > 0 && matchesAutoKeywords(evalName, evalHandle, kwList)) {
+              if (!Array.isArray(f.channels)) f.channels = [];
+              if (!f.channels.includes(evalId)) {
+                f.channels.push(evalId);
+                foldersChanged = true;
+              }
+            }
+          }
         }
       }
 
-      if (updatedCount > 0) {
-        await setChannels(channels);
+      if (updatedCount > 0 || foldersChanged) {
+        const payload = { [STORAGE_KEYS.CHANNELS]: channels };
+        if (foldersChanged) {
+          payload[STORAGE_KEYS.FOLDERS] = folders;
+        }
+        await setRaw(payload);
+        notifyChange();
       }
 
       return { updatedCount };
@@ -1034,8 +1382,8 @@ const YTFolderStorage = (() => {
 
   async function toggleChannelInFolder(folderId, channelInfo) {
     return withStorageLock(async () => {
-      const folders = await getFolders();
-      const channels = await getChannels();
+      const folders = await _getFoldersUnlocked();
+      const channels = await _getChannelsUnlocked();
       const folder = folders.find(f => f.id === folderId);
       if (!folder) return false;
 
@@ -1058,18 +1406,18 @@ const YTFolderStorage = (() => {
       });
 
       if (exists) {
-        await removeChannelFromFolder(folderId, chId);
+        await _removeChannelFromFolderUnlocked(folderId, chId);
         return false; // Removed
       } else {
-        await addChannelToFolder(folderId, channelInfo);
+        await _addChannelToFolderUnlocked(folderId, channelInfo);
         return true; // Added
       }
     });
   }
 
   async function getFoldersByChannel(channelId, channelHandle = '') {
-    const folders = await getFolders();
-    const channels = await getChannels();
+    const folders = await _getFoldersUnlocked();
+    const channels = await _getChannelsUnlocked();
     const matchedFolderIds = [];
 
     const normHandle = normalizeHandle(channelHandle);
@@ -1115,8 +1463,8 @@ const YTFolderStorage = (() => {
   }
 
   async function getUncategorizedChannels() {
-    const folders = await getFolders();
-    const channels = await getChannels();
+    const folders = await _getFoldersUnlocked();
+    const channels = await _getChannelsUnlocked();
     const assignedTokens = new Set();
 
     // Build O(1) index of channels by lowercase id and normalized handle
@@ -1178,8 +1526,10 @@ const YTFolderStorage = (() => {
 
   async function batchAddChannels(channelsArray) {
     return withStorageLock(async () => {
-      const channels = await getChannels();
+      const channels = await _getChannelsUnlocked();
+      const folders = await _getFoldersUnlocked();
       let newCount = 0;
+      let foldersChanged = false;
 
       // Build O(1) lookup index
       const keyByToken = new Map();
@@ -1218,9 +1568,27 @@ const YTFolderStorage = (() => {
 
         keyByToken.set(String(targetKey).toLowerCase(), targetKey);
         if (normH) keyByToken.set(normH, targetKey);
+
+        // Phase 4.1: Smart Auto-Categorization based on autoKeywords
+        for (const f of folders) {
+          const kwList = Array.isArray(f.autoKeywords)
+            ? f.autoKeywords
+            : (typeof f.autoKeywords === 'string' ? f.autoKeywords.split(/[,，\n]/).map(k => k.trim()).filter(Boolean) : []);
+          if (kwList.length > 0 && matchesAutoKeywords(ch.name || targetKey, ch.handle, kwList)) {
+            if (!Array.isArray(f.channels)) f.channels = [];
+            if (!f.channels.includes(targetKey)) {
+              f.channels.push(targetKey);
+              foldersChanged = true;
+            }
+          }
+        }
       }
 
-      await setRaw({ [STORAGE_KEYS.CHANNELS]: channels });
+      const savePayload = { [STORAGE_KEYS.CHANNELS]: channels };
+      if (foldersChanged) {
+        savePayload[STORAGE_KEYS.FOLDERS] = folders;
+      }
+      await setRaw(savePayload);
       notifyChange();
       return { total: Object.keys(channels).length, newCount };
     });
@@ -1228,7 +1596,7 @@ const YTFolderStorage = (() => {
 
   async function setChannelSubscribed(channelId, isSubscribed = true) {
     return withStorageLock(async () => {
-      const channels = await getChannels();
+      const channels = await _getChannelsUnlocked();
       let ch = channels[channelId];
       if (!ch && channelId) {
         const targetLower = channelId.toLowerCase();
@@ -1242,7 +1610,7 @@ const YTFolderStorage = (() => {
       }
       if (ch) {
         ch.isSubscribed = Boolean(isSubscribed);
-        await setChannels(channels);
+        await _setChannelsUnlocked(channels);
         return true;
       }
       return false;
@@ -1251,7 +1619,7 @@ const YTFolderStorage = (() => {
 
   async function batchUpdateChannels(updates) {
     return withStorageLock(async () => {
-      const channels = await getChannels();
+      const channels = await _getChannelsUnlocked();
       for (const u of updates) {
         if (!u || typeof u !== 'object') continue;
         const id = u.id || u.handle;
@@ -1268,7 +1636,7 @@ const YTFolderStorage = (() => {
           isSubscribed: u.isSubscribed !== undefined ? Boolean(u.isSubscribed) : (prev.isSubscribed !== false)
         };
       }
-      await setChannels(channels);
+      await _setChannelsUnlocked(channels);
     });
   }
 
@@ -1276,8 +1644,8 @@ const YTFolderStorage = (() => {
   // Backup Export, Import & Clean Duplicates
   // ---------------------------------------------------------------------------
   async function exportData() {
-    const folders = await getFolders();
-    const channels = await getChannels();
+    const folders = await _getFoldersUnlocked();
+    const channels = await _getChannelsUnlocked();
     const settings = await getSettings();
     return JSON.stringify({
       version: 2,
@@ -1315,8 +1683,8 @@ const YTFolderStorage = (() => {
       let channelsToProcess = incomingChannels;
 
       if (mergeWithExisting) {
-        const existingFolders = await getFolders();
-        const existingChannels = await getChannels();
+        const existingFolders = await _getFoldersUnlocked();
+        const existingChannels = await _getChannelsUnlocked();
 
         const mergedFoldersMap = new Map();
         existingFolders.forEach(f => {
@@ -1328,8 +1696,9 @@ const YTFolderStorage = (() => {
             const ex = mergedFoldersMap.get(f.id);
             ex.channels = [...ex.channels, ...(f.channels || [])];
           } else {
+            const incNormName = normalizeFolderIconAndName(f.name || '', f.icon).name.toLowerCase();
             const matchByName = Array.from(mergedFoldersMap.values()).find(ex =>
-              ex.name.trim().toLowerCase() === (f.name || '').trim().toLowerCase()
+              normalizeFolderIconAndName(ex.name || '', ex.icon).name.toLowerCase() === incNormName
             );
             if (matchByName) {
               matchByName.channels = [...matchByName.channels, ...(f.channels || [])];
@@ -1377,8 +1746,8 @@ const YTFolderStorage = (() => {
   // Standalone duplicate cleaner for current storage
   async function cleanDuplicates(singleFolderMode = true) {
     return withStorageLock(async () => {
-      const folders = await getFolders();
-      const channels = await getChannels();
+      const folders = await _getFoldersUnlocked();
+      const channels = await _getChannelsUnlocked();
 
       const dedupResult = deduplicateData({
         folders,
@@ -1399,6 +1768,213 @@ const YTFolderStorage = (() => {
         removedCount: dedupResult.removedCount,
         stats: dedupResult.stats
       };
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 4.3: Zero-Server Cross-Device Sync Skeleton (chrome.storage.sync)
+  // ---------------------------------------------------------------------------
+  async function exportSyncSkeleton() {
+    const folders = await _getFoldersUnlocked();
+    return {
+      version: 1,
+      timestamp: Date.now(),
+      folders: folders.map(f => ({
+        id: f.id,
+        name: f.name,
+        icon: f.icon,
+        color: f.color,
+        description: f.description || '',
+        autoKeywords: Array.isArray(f.autoKeywords) ? f.autoKeywords : [],
+        channels: Array.isArray(f.channels) ? [...f.channels] : []
+      }))
+    };
+  }
+
+  const SYNC_META_KEY = 'yt_sync_meta';
+  const CHUNK_PREFIX = 'yt_sync_c_';
+  const CHUNK_SIZE = 6000;
+  const LEGACY_SYNC_KEY = 'yt_folders_sync_skeleton';
+
+  async function _writeSyncSkeleton(skeleton) {
+    const json = JSON.stringify(skeleton);
+    const chunkCount = Math.max(1, Math.ceil(json.length / CHUNK_SIZE));
+
+    // Clean up obsolete chunks if previous payload had more chunks
+    try {
+      const prevMeta = await new Promise(resolve => {
+        chrome.storage.sync.get([SYNC_META_KEY], (res) => resolve(res || {}));
+      });
+      const prevChunks = prevMeta?.[SYNC_META_KEY]?.chunks;
+      const obsoleteKeys = [];
+      if (typeof prevChunks === 'number' && prevChunks > chunkCount) {
+        for (let i = chunkCount; i < prevChunks; i++) {
+          obsoleteKeys.push(`${CHUNK_PREFIX}${i}`);
+        }
+      }
+      if (json.length > 7500) {
+        obsoleteKeys.push(LEGACY_SYNC_KEY);
+      }
+      if (obsoleteKeys.length > 0 && typeof chrome.storage.sync.remove === 'function') {
+        await new Promise(resolve => {
+          chrome.storage.sync.remove(obsoleteKeys, () => resolve());
+        });
+      }
+    } catch (_) {}
+
+    const items = {
+      [SYNC_META_KEY]: {
+        version: 1,
+        timestamp: skeleton.timestamp || Date.now(),
+        chunks: chunkCount,
+        folderCount: skeleton.folders ? skeleton.folders.length : 0,
+        channelCount: skeleton.folders ? skeleton.folders.reduce((acc, f) => acc + (f.channels?.length || 0), 0) : 0
+      }
+    };
+    for (let i = 0; i < chunkCount; i++) {
+      items[`${CHUNK_PREFIX}${i}`] = json.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    }
+    // Also store in legacy key for backwards compatibility if within 7500 bytes
+    if (json.length <= 7500) {
+      items[LEGACY_SYNC_KEY] = skeleton;
+    }
+    await new Promise((resolve, reject) => {
+      chrome.storage.sync.set(items, () => {
+        if (chrome.runtime?.lastError) reject(chrome.runtime.lastError);
+        else resolve();
+      });
+    });
+  }
+
+  async function _readSyncSkeleton() {
+    const meta = await new Promise(resolve => {
+      chrome.storage.sync.get([SYNC_META_KEY, LEGACY_SYNC_KEY], (res) => resolve(res || {}));
+    });
+    if (meta && meta[SYNC_META_KEY] && typeof meta[SYNC_META_KEY].chunks === 'number') {
+      const numChunks = meta[SYNC_META_KEY].chunks;
+      const keys = Array.from({ length: numChunks }, (_, i) => `${CHUNK_PREFIX}${i}`);
+      const chunksData = await new Promise(resolve => {
+        chrome.storage.sync.get(keys, (res) => resolve(res || {}));
+      });
+      let fullJson = '';
+      for (let i = 0; i < numChunks; i++) {
+        fullJson += chunksData[`${CHUNK_PREFIX}${i}`] || '';
+      }
+      try {
+        const parsed = JSON.parse(fullJson);
+        if (parsed && Array.isArray(parsed.folders)) return parsed;
+      } catch (e) {
+        console.warn('[YTFolderStorage] Error parsing sharded sync data:', e);
+      }
+    }
+    if (meta && meta[LEGACY_SYNC_KEY] && Array.isArray(meta[LEGACY_SYNC_KEY].folders)) {
+      return meta[LEGACY_SYNC_KEY];
+    }
+    return null;
+  }
+
+  async function syncWithCloud(directionOrData = 'auto') {
+    if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.sync) {
+      return { success: false, reason: 'STORAGE_SYNC_UNAVAILABLE' };
+    }
+    return withStorageLock(async () => {
+      const direction = typeof directionOrData === 'string' ? directionOrData : 'upload';
+      const customData = (typeof directionOrData === 'object' && directionOrData) ? directionOrData : null;
+
+      if (customData) {
+        try {
+          await _writeSyncSkeleton(customData);
+          const channelCount = (customData.folders || []).reduce((acc, f) => acc + (f.channels?.length || 0), 0);
+          return { success: true, direction: 'upload', count: customData.folders?.length || 0, channelIdCount: channelCount };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      if (direction === 'upload') {
+        const skeleton = await exportSyncSkeleton();
+        try {
+          await _writeSyncSkeleton(skeleton);
+          const channelCount = skeleton.folders.reduce((acc, f) => acc + (f.channels?.length || 0), 0);
+          return { success: true, direction: 'upload', count: skeleton.folders.length, channelIdCount: channelCount };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }
+
+      if (direction === 'download') {
+        const remote = await _readSyncSkeleton();
+        if (!remote || !Array.isArray(remote.folders)) {
+          return { success: false, reason: 'NO_REMOTE_DATA' };
+        }
+        const localFolders = await _getFoldersUnlocked();
+        const folderMap = new Map(localFolders.map(f => [f.id, f]));
+        for (const rf of remote.folders) {
+          if (!rf || !rf.id) continue;
+          if (folderMap.has(rf.id)) {
+            const ex = folderMap.get(rf.id);
+            ex.channels = Array.from(new Set([...(ex.channels || []), ...(rf.channels || [])]));
+            if (Array.isArray(rf.autoKeywords) && rf.autoKeywords.length > 0) {
+              ex.autoKeywords = Array.from(new Set([...(ex.autoKeywords || []), ...rf.autoKeywords]));
+            }
+          } else {
+            localFolders.push({
+              id: rf.id,
+              name: rf.name,
+              icon: rf.icon,
+              color: rf.color,
+              description: rf.description || '',
+              autoKeywords: rf.autoKeywords || [],
+              channels: Array.isArray(rf.channels) ? rf.channels : []
+            });
+          }
+        }
+        await _setFoldersUnlocked(localFolders);
+        const channelCount = localFolders.reduce((acc, f) => acc + (f.channels?.length || 0), 0);
+        return { success: true, direction: 'download', count: localFolders.length, channelIdCount: channelCount };
+      }
+
+      // 'auto' mode: Bi-directional synchronization
+      const remote = await _readSyncSkeleton();
+      const localFolders = await _getFoldersUnlocked();
+
+      if (!remote || !Array.isArray(remote.folders) || remote.folders.length === 0) {
+        // No remote data -> perform initial upload
+        const skeleton = await exportSyncSkeleton();
+        await _writeSyncSkeleton(skeleton);
+        const channelCount = skeleton.folders.reduce((acc, f) => acc + (f.channels?.length || 0), 0);
+        return { success: true, direction: 'upload', count: skeleton.folders.length, channelIdCount: channelCount };
+      }
+
+      // Merge remote with local (two-way union)
+      const folderMap = new Map(localFolders.map(f => [f.id, f]));
+      for (const rf of remote.folders) {
+        if (!rf || !rf.id) continue;
+        if (folderMap.has(rf.id)) {
+          const ex = folderMap.get(rf.id);
+          ex.channels = Array.from(new Set([...(ex.channels || []), ...(rf.channels || [])]));
+          if (Array.isArray(rf.autoKeywords) && rf.autoKeywords.length > 0) {
+            ex.autoKeywords = Array.from(new Set([...(ex.autoKeywords || []), ...rf.autoKeywords]));
+          }
+        } else {
+          localFolders.push({
+            id: rf.id,
+            name: rf.name,
+            icon: rf.icon,
+            color: rf.color,
+            description: rf.description || '',
+            autoKeywords: rf.autoKeywords || [],
+            channels: Array.isArray(rf.channels) ? rf.channels : []
+          });
+        }
+      }
+
+      // Save locally and write updated union back to cloud
+      await _setFoldersUnlocked(localFolders);
+      const mergedSkeleton = await exportSyncSkeleton();
+      await _writeSyncSkeleton(mergedSkeleton);
+      const channelCount = localFolders.reduce((acc, f) => acc + (f.channels?.length || 0), 0);
+      return { success: true, direction: 'merge', count: localFolders.length, channelIdCount: channelCount };
     });
   }
 
@@ -1427,8 +2003,11 @@ const YTFolderStorage = (() => {
     addFolder,
     updateFolder,
     deleteFolder,
+    reorderFolders,
     addChannelToFolder,
     removeChannelFromFolder,
+    batchMoveChannels,
+    batchRemoveChannelsFromFolder,
     removeChannelFromAllFolders,
     batchRemoveUnsubscribedChannels,
     enrichChannelsMetadata,
@@ -1442,11 +2021,18 @@ const YTFolderStorage = (() => {
     cleanDuplicates,
     exportData,
     importData,
+    exportSyncSkeleton,
+    syncWithCloud,
+    matchesAutoKeywords,
     sanitizeAvatarUrl,
     sanitizeFolderColor,
     sanitizeFolderIcon,
+    normalizeFolderIconAndName,
     sanitizeSettings,
-    normalizeHandle
+    normalizeHandle,
+    checkSystemActionTitle,
+    STORAGE_KEYS,
+    DEFAULT_SETTINGS
   };
 })();
 

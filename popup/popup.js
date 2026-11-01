@@ -105,6 +105,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Search Mode
     const matchedFolders = allFolders.filter(f =>
       (f.name && f.name.toLowerCase().includes(query)) ||
+      (f.icon && f.icon.toLowerCase().includes(query)) ||
       (f.description && f.description.toLowerCase().includes(query))
     );
 
@@ -271,13 +272,64 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.runtime.openOptionsPage();
   });
 
-  btnAddFolder.addEventListener('click', async () => {
-    const name = prompt('請輸入新分組名稱 (例如: ☕ 每日晨間新聞):');
-    if (name && name.trim()) {
-      await YTFolderStorage.addFolder({ name: name.trim() });
-      await refreshData();
+  const popupInlineAdd = document.getElementById('popup-inline-add');
+  const inputNewFolderName = document.getElementById('input-new-folder-name');
+  const btnSubmitNewFolder = document.getElementById('btn-submit-new-folder');
+  const btnCancelNewFolder = document.getElementById('btn-cancel-new-folder');
+
+  function showInlineAddFolder() {
+    if (!popupInlineAdd) return;
+    popupInlineAdd.style.display = 'flex';
+    if (inputNewFolderName) {
+      inputNewFolderName.value = '';
+      inputNewFolderName.focus();
+    }
+  }
+
+  function hideInlineAddFolder() {
+    if (!popupInlineAdd) return;
+    popupInlineAdd.style.display = 'none';
+    if (inputNewFolderName) {
+      inputNewFolderName.value = '';
+    }
+  }
+
+  async function handleCreateFolder() {
+    const name = inputNewFolderName ? inputNewFolderName.value.trim() : '';
+    if (!name) return;
+    await YTFolderStorage.addFolder({ name });
+    hideInlineAddFolder();
+    await refreshData();
+  }
+
+  btnAddFolder.addEventListener('click', () => {
+    if (!popupInlineAdd) return;
+    if (popupInlineAdd.style.display === 'none' || !popupInlineAdd.style.display) {
+      showInlineAddFolder();
+    } else {
+      hideInlineAddFolder();
     }
   });
+
+  if (btnSubmitNewFolder) {
+    btnSubmitNewFolder.addEventListener('click', handleCreateFolder);
+  }
+
+  if (btnCancelNewFolder) {
+    btnCancelNewFolder.addEventListener('click', hideInlineAddFolder);
+  }
+
+  if (inputNewFolderName) {
+    inputNewFolderName.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleCreateFolder();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        hideInlineAddFolder();
+      }
+    });
+  }
 
   await refreshData();
 });

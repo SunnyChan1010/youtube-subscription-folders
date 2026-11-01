@@ -12,6 +12,8 @@
   let cachedChannels = {};
   let cachedSettings = { hideWatched: false, hideShorts: false, onlyLive: false, activeFeedFolderId: 'all' };
   let activeFilterFolderId = 'all';
+  let selectedFilterFolderIds = new Set();
+  let mutedFilterFolderIds = new Set();
   let feedObserver = null;
   let isApplyingFilter = false;
 
@@ -20,11 +22,50 @@
   let currentDropdownChannelInfo = null;
   let currentDropdownTriggerBtn = null;
 
+  // Phase 3.1: Centralized DOM Selector Registry with fallback priority chains
+  const YT_DOM_SELECTORS = {
+    subscribeButtons: [
+      'yt-subscribe-button-view-model button',
+      'subscribe-button-view-model button',
+      '#owner #subscribe-button button',
+      'ytd-subscribe-button-renderer button',
+      '#subscribe-button button'
+    ],
+    feedRoot: [
+      'ytd-browse[page-subtype="subscriptions"]',
+      'ytd-browse:not([hidden])'
+    ],
+    videoCards: [
+      'ytd-rich-item-renderer',
+      'ytd-grid-video-renderer'
+    ],
+    shelfSections: [
+      'ytd-rich-section-renderer',
+      'ytd-reel-shelf-renderer'
+    ],
+    authorLinks: [
+      'ytd-channel-name a',
+      '#channel-name a',
+      'a#avatar-link',
+      '#avatar-container a',
+      'yt-content-metadata-view-model a[href*="/@"]',
+      'yt-content-metadata-view-model a[href*="/channel/"]',
+      'yt-decorated-avatar-view-model a'
+    ],
+    sidebarGuide: [
+      'ytd-guide-renderer #sections',
+      '#guide-inner-content #sections',
+      'tp-yt-app-drawer #sections',
+      '#sections.ytd-guide-renderer'
+    ]
+  };
+
   const DEFAULT_AVATAR = (typeof YT_DEFAULT_AVATAR !== 'undefined' ? YT_DEFAULT_AVATAR : "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9IiMyODI4MjgiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjgiIHI9IjMuNiIgZmlsbD0iI2FhYWFhYSIvPjxwYXRoIGQ9Ik0xMiAxMy41Yy0zIDAtNi41IDEuNS02LjUgMy41djEuNWgxM3YtMS41YzAtMi0zLjUtMy41LTYuNS0zLjV6IiBmaWxsPSIjYWFhYWFhIi8+PC9zdmc+");
 
+  // Only handle image fallback for our extension's elements with data-default-src to avoid hijacking YouTube thumbnails
   document.addEventListener('error', (e) => {
-    if (e.target && e.target.tagName === 'IMG') {
-      const defaultSrc = e.target.dataset.defaultSrc || DEFAULT_AVATAR;
+    if (e.target && e.target.tagName === 'IMG' && e.target.dataset && e.target.dataset.defaultSrc) {
+      const defaultSrc = e.target.dataset.defaultSrc;
       if (e.target.src !== defaultSrc) {
         e.target.src = defaultSrc;
       }
@@ -32,6 +73,9 @@
   }, true);
 
   function escapeHtml(str) {
+    if (typeof YTFolderUtils !== 'undefined' && typeof YTFolderUtils.escapeHtml === 'function') {
+      return YTFolderUtils.escapeHtml(str);
+    }
     if (!str) return '';
     return String(str)
       .replace(/&/g, '&amp;')
@@ -42,12 +86,84 @@
   }
 
   function sanitizeUrl(url) {
+    if (typeof YTFolderUtils !== 'undefined' && typeof YTFolderUtils.sanitizeUrl === 'function') {
+      return YTFolderUtils.sanitizeUrl(url);
+    }
     if (!url) return '#';
     const trimmed = String(url).trim();
     if (/^(?:javascript|data|vbscript):/i.test(trimmed)) {
       return '#';
     }
     return escapeHtml(trimmed);
+  }
+
+  function getFolderDisplay(folder) {
+    if (!folder) return { icon: '📁', name: '' };
+    if (typeof YTFolderStorage !== 'undefined' && typeof YTFolderStorage.normalizeFolderIconAndName === 'function') {
+      return YTFolderStorage.normalizeFolderIconAndName(folder.name, folder.icon);
+    }
+    if (typeof YTFolderUtils !== 'undefined' && typeof YTFolderUtils.normalizeFolderIconAndName === 'function') {
+      return YTFolderUtils.normalizeFolderIconAndName(folder.name, folder.icon);
+    }
+    const icon = folder.icon || '📁';
+    let name = String(folder.name || '').trim();
+    if (icon && name.startsWith(icon)) {
+      const stripped = name.slice(icon.length).trim();
+      if (stripped) name = stripped;
+    }
+    return { icon, name };
+  }
+
+  let hasHarvestedSidebarThisSession = false;
+
+  async function harvestSidebarSubscriptions() {
+    if (hasHarvestedSidebarThisSession) return;
+    const entries = document.querySelectorAll('ytd-guide-section-renderer ytd-guide-entry-renderer');
+    if (!entries || entries.length === 0) return;
+
+    const discovered = [];
+    entries.forEach(el => {
+      const a = el.querySelector('a#endpoint');
+      if (!a) return;
+      const href = a.getAttribute('href') || '';
+      if (!href.startsWith('/@') && !href.startsWith('/channel/')) return;
+
+      const img = el.querySelector('yt-img-shadow img, img')?.src || '';
+      // Only harvest real channel entries that have a YouTube channel avatar (skipping system items like "你的頻道" or "音樂")
+      if (!img || (!img.includes('yt3.ggpht.com') && !img.includes('yt3.googleusercontent.com'))) return;
+
+      let id = '';
+      let handle = '';
+      const hMatch = href.match(/\/@([^\/\?]+)/);
+      if (hMatch) handle = `@${hMatch[1]}`;
+      const idMatch = href.match(/\/channel\/([^\/\?]+)/);
+      if (idMatch) id = idMatch[1];
+
+      const title = el.querySelector('yt-formatted-string.title')?.textContent?.trim() || a.getAttribute('title') || '';
+      const finalName = title || handle || id;
+      if (!id && !handle) return;
+      if (typeof isSystemActionTitle === 'function' && (isSystemActionTitle(finalName) || isSystemActionTitle(handle) || isSystemActionTitle(id))) {
+        return;
+      }
+
+      discovered.push({
+        id: id || handle,
+        name: finalName,
+        handle,
+        avatarUrl: img,
+        isSubscribed: true
+      });
+    });
+
+    if (discovered.length > 0 && typeof YTFolderStorage !== 'undefined' && typeof YTFolderStorage.enrichChannelsMetadata === 'function') {
+      hasHarvestedSidebarThisSession = true;
+      try {
+        const res = await YTFolderStorage.enrichChannelsMetadata(discovered);
+        if (res && res.updatedCount > 0) {
+          cachedChannels = await YTFolderStorage.getChannels();
+        }
+      } catch (e) {}
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -100,6 +216,7 @@
     }
 
     renderSidebarContent(existingSection);
+    harvestSidebarSubscriptions();
   }
 
   let suppressNextStorageSidebarRebuild = false;
@@ -129,6 +246,26 @@
       <div class="yt-org-sidebar-search-container">
         <input type="text" class="yt-org-sidebar-search-input" id="yt-org-sidebar-search-input" placeholder="🔍 搜尋分組或頻道..." value="${escapeHtml(prevSearchQuery)}" />
       </div>
+    `;
+
+    const totalCategorizedChannels = cachedFolders.reduce((sum, f) => sum + (f.channels ? f.channels.length : 0), 0);
+    const showOnboardingCard = totalCategorizedChannels === 0 && (!cachedSettings || !cachedSettings.dismissedOnboarding);
+    if (showOnboardingCard) {
+      html += `
+        <div class="yt-org-onboarding-card" id="yt-org-onboarding-card">
+          <div class="yt-org-onboarding-header">
+            <span>🚀 新手快速開始</span>
+            <button class="yt-org-onboarding-dismiss" id="yt-org-onboarding-dismiss" title="關閉提示">✕</button>
+          </div>
+          <div class="yt-org-onboarding-desc">
+            目前分組尚無頻道。可前往管理後台一鍵同步訂閱或匯入備份，或在頻道／影片頁點擊「➕ 分類」。
+          </div>
+          <button class="yt-org-onboarding-cta" id="yt-org-onboarding-open-options">🔄 同步並整理訂閱頻道</button>
+        </div>
+      `;
+    }
+
+    html += `
       <ul class="yt-org-folder-list">
     `;
 
@@ -136,13 +273,14 @@
       const channelCount = folder.channels ? folder.channels.length : 0;
       const isFilterActive = (window.location.pathname.startsWith('/feed/subscriptions') && activeFilterFolderId === folder.id);
       const isExpanded = Boolean(cachedSettings.expandedFolders && cachedSettings.expandedFolders[folder.id]);
-      const safeDesc = escapeHtml(folder.description || folder.name);
-      const safeFolderName = escapeHtml(folder.name);
+      const display = getFolderDisplay(folder);
+      const safeDesc = escapeHtml(folder.description || display.name);
+      const safeFolderName = escapeHtml(display.name);
 
       html += `
         <li class="yt-org-folder-item" data-folder-id="${escapeHtml(folder.id)}">
           <div class="yt-org-folder-row ${isFilterActive ? 'yt-org-active' : ''}" title="${safeDesc}（雙擊開啟訂閱內容並過濾此分組）">
-            <span class="yt-org-folder-icon">${escapeHtml(folder.icon || '📁')}</span>
+            <span class="yt-org-folder-icon">${escapeHtml(display.icon)}</span>
             <span class="yt-org-folder-name">${safeFolderName}</span>
             <span class="yt-org-folder-badge">${channelCount}</span>
             <span class="yt-org-folder-chevron ${isExpanded ? 'expanded' : ''}">▶</span>
@@ -168,7 +306,7 @@
         });
       } else {
         html += `
-          <li style="padding: 6px 16px 6px 44px; font-size: 12px; opacity: 0.6;">(尚無頻道)</li>
+          <li class="yt-org-empty-folder-hint" title="點擊開啟管理後台指派頻道或匯入備份" style="padding: 6px 12px 6px 36px; font-size: 12px; opacity: 0.65; cursor: pointer;">(尚無頻道 · 點此管理)</li>
         `;
       }
 
@@ -189,6 +327,32 @@
       container.scrollTop = prevContainerScrollTop;
     }
 
+    container.querySelectorAll('.yt-org-empty-folder-hint').forEach(hintEl => {
+      hintEl.onclick = (e) => {
+        e.stopPropagation();
+        chrome.runtime.sendMessage({ action: 'OPEN_OPTIONS' });
+      };
+    });
+
+    const onboardingOpenBtn = container.querySelector('#yt-org-onboarding-open-options');
+    if (onboardingOpenBtn) {
+      onboardingOpenBtn.onclick = (e) => {
+        e.stopPropagation();
+        chrome.runtime.sendMessage({ action: 'OPEN_OPTIONS' });
+      };
+    }
+
+    const onboardingDismissBtn = container.querySelector('#yt-org-onboarding-dismiss');
+    if (onboardingDismissBtn) {
+      onboardingDismissBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const card = container.querySelector('#yt-org-onboarding-card');
+        if (card) card.style.display = 'none';
+        cachedSettings.dismissedOnboarding = true;
+        await YTFolderStorage.updateSettings({ dismissedOnboarding: true });
+      };
+    }
+
     const searchInput = container.querySelector('#yt-org-sidebar-search-input');
     if (searchInput) {
       searchInput.onkeydown = (e) => e.stopPropagation();
@@ -201,6 +365,7 @@
           if (!folder) return;
 
           const folderNameMatch = (folder.name || '').toLowerCase().includes(query) ||
+                                  (folder.icon || '').toLowerCase().includes(query) ||
                                   (folder.description || '').toLowerCase().includes(query);
 
           const sublist = item.querySelector('.yt-org-channels-sublist');
@@ -398,21 +563,24 @@
   }
 
   function renderFeedFilterBar(container) {
+    const isAllActive = selectedFilterFolderIds.size === 0 && activeFilterFolderId === 'all';
     let chipsHtml = `
       <div class="yt-org-feed-filter-wrapper">
         <div class="yt-org-chips-scroll">
-          <button class="yt-org-chip ${activeFilterFolderId === 'all' ? 'active' : ''}" data-folder-id="all">
+          <button class="yt-org-chip ${isAllActive ? 'active' : ''}" data-folder-id="all" title="點擊檢視全部動態">
             <span>全部動態</span>
           </button>
     `;
 
     cachedFolders.forEach(folder => {
       const count = folder.channels ? folder.channels.length : 0;
-      const isActive = activeFilterFolderId === folder.id;
+      const isActive = selectedFilterFolderIds.has(folder.id) || (selectedFilterFolderIds.size === 0 && activeFilterFolderId === folder.id);
+      const isMuted = mutedFilterFolderIds.has(folder.id);
+      const display = getFolderDisplay(folder);
       chipsHtml += `
-        <button class="yt-org-chip ${isActive ? 'active' : ''}" data-folder-id="${escapeHtml(folder.id)}">
-          <span>${escapeHtml(folder.icon || '📁')}</span>
-          <span>${escapeHtml(folder.name)}</span>
+        <button class="yt-org-chip ${isActive ? 'active' : ''} ${isMuted ? 'muted' : ''}" data-folder-id="${escapeHtml(folder.id)}" title="點擊過濾；Shift/Ctrl+點擊多選聯集；右鍵點擊切換屏蔽模式">
+          <span>${escapeHtml(display.icon)}</span>
+          <span>${escapeHtml(display.name)}</span>
           <span class="yt-org-chip-badge">(${count})</span>
         </button>
       `;
@@ -437,9 +605,59 @@
     container.innerHTML = chipsHtml;
 
     container.querySelectorAll('.yt-org-chip').forEach(btn => {
-      btn.onclick = () => {
-        activeFilterFolderId = btn.dataset.folderId;
-        YTFolderStorage.updateSettings({ activeFeedFolderId: activeFilterFolderId });
+      btn.onclick = (e) => {
+        const folderId = btn.dataset.folderId;
+        if (folderId === 'all') {
+          selectedFilterFolderIds.clear();
+          activeFilterFolderId = 'all';
+        } else if (e.shiftKey || e.ctrlKey || e.metaKey) {
+          // Phase 4.2 Multi-folder union toggle
+          if (selectedFilterFolderIds.size === 0 && activeFilterFolderId !== 'all') {
+            selectedFilterFolderIds.add(activeFilterFolderId);
+          }
+          if (selectedFilterFolderIds.has(folderId)) {
+            selectedFilterFolderIds.delete(folderId);
+          } else {
+            selectedFilterFolderIds.add(folderId);
+            mutedFilterFolderIds.delete(folderId);
+          }
+          if (selectedFilterFolderIds.size === 0) {
+            activeFilterFolderId = 'all';
+          } else if (selectedFilterFolderIds.size === 1) {
+            activeFilterFolderId = Array.from(selectedFilterFolderIds)[0];
+          } else {
+            activeFilterFolderId = 'multi';
+          }
+        } else {
+          // Single select
+          selectedFilterFolderIds.clear();
+          selectedFilterFolderIds.add(folderId);
+          activeFilterFolderId = folderId;
+          mutedFilterFolderIds.delete(folderId);
+        }
+        YTFolderStorage.updateSettings({ activeFeedFolderId });
+        updateFeedFilterChipsUI();
+        applyFeedFilters();
+      };
+
+      // Phase 4.2 Focus Mute Mode (Right-click contextmenu)
+      btn.oncontextmenu = (e) => {
+        const folderId = btn.dataset.folderId;
+        if (folderId === 'all') return;
+        e.preventDefault();
+        const display = getFolderDisplay(cachedFolders.find(f => f.id === folderId));
+        const folderName = display ? display.name : folderId;
+        if (mutedFilterFolderIds.has(folderId)) {
+          mutedFilterFolderIds.delete(folderId);
+          showToast(`已取消屏蔽「${folderName}」分組`);
+        } else {
+          mutedFilterFolderIds.add(folderId);
+          selectedFilterFolderIds.delete(folderId);
+          if (activeFilterFolderId === folderId) {
+            activeFilterFolderId = selectedFilterFolderIds.size > 0 ? 'multi' : 'all';
+          }
+          showToast(`🚫 已屏蔽「${folderName}」分組的影片`);
+        }
         updateFeedFilterChipsUI();
         applyFeedFilters();
       };
@@ -488,8 +706,17 @@
   function updateFeedFilterChipsUI() {
     const container = document.getElementById('yt-org-feed-filter-container');
     if (!container) return;
+    const isAllActive = selectedFilterFolderIds.size === 0 && activeFilterFolderId === 'all';
     container.querySelectorAll('.yt-org-chip').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.folderId === activeFilterFolderId);
+      const fid = btn.dataset.folderId;
+      if (fid === 'all') {
+        btn.classList.toggle('active', isAllActive);
+      } else {
+        const isAct = selectedFilterFolderIds.has(fid) || (selectedFilterFolderIds.size === 0 && activeFilterFolderId === fid);
+        const isMut = mutedFilterFolderIds.has(fid);
+        btn.classList.toggle('active', isAct && !isMut);
+        btn.classList.toggle('muted', isMut);
+      }
     });
   }
 
@@ -515,41 +742,88 @@
 
     requestAnimationFrame(() => {
       try {
-        const feedRoot = document.querySelector('ytd-browse[page-subtype="subscriptions"]') ||
-                         document.querySelector('ytd-browse:not([hidden])') ||
+        const feedRoot = document.querySelector(YT_DOM_SELECTORS.feedRoot.join(', ')) ||
                          document;
         const videoCards = feedRoot.querySelectorAll(
-          'ytd-rich-item-renderer, ytd-grid-video-renderer'
+          YT_DOM_SELECTORS.videoCards.join(', ')
         );
 
         let allowedIds = new Set();
         let allowedHandles = new Set();
         let allowedNames = new Set();
 
-        if (activeFilterFolderId !== 'all') {
+        const activeFolders = [];
+        if (selectedFilterFolderIds.size > 0) {
+          cachedFolders.forEach(f => {
+            if (selectedFilterFolderIds.has(f.id)) activeFolders.push(f);
+          });
+        } else if (activeFilterFolderId !== 'all') {
           const folder = cachedFolders.find(f => f.id === activeFilterFolderId);
-          if (folder && Array.isArray(folder.channels)) {
-            folder.channels.forEach(chId => {
-              allowedIds.add(chId.toLowerCase());
-              const ch = cachedChannels[chId];
-              if (ch) {
-                if (ch.handle) {
-                  allowedHandles.add(ch.handle.toLowerCase().replace('@', ''));
+          if (folder) activeFolders.push(folder);
+        }
+
+        const isFiltering = activeFolders.length > 0;
+        if (isFiltering) {
+          activeFolders.forEach(folder => {
+            if (Array.isArray(folder.channels)) {
+              folder.channels.forEach(chId => {
+                allowedIds.add(chId.toLowerCase());
+                const ch = cachedChannels[chId];
+                if (ch) {
+                  if (ch.handle) {
+                    allowedHandles.add(ch.handle.toLowerCase().replace('@', ''));
+                  }
+                  if (ch.name) {
+                    allowedNames.add(ch.name.toLowerCase().trim());
+                  }
                 }
-                if (ch.name) {
-                  allowedNames.add(ch.name.toLowerCase().trim());
+              });
+            }
+          });
+        }
+
+        // Gather Focus Mute sets
+        let mutedIds = new Set();
+        let mutedHandles = new Set();
+        let mutedNames = new Set();
+        if (mutedFilterFolderIds.size > 0) {
+          cachedFolders.forEach(f => {
+            if (mutedFilterFolderIds.has(f.id) && Array.isArray(f.channels)) {
+              f.channels.forEach(chId => {
+                mutedIds.add(chId.toLowerCase());
+                const ch = cachedChannels[chId];
+                if (ch) {
+                  if (ch.handle) mutedHandles.add(ch.handle.toLowerCase().replace('@', ''));
+                  if (ch.name) mutedNames.add(ch.name.toLowerCase().trim());
                 }
-              }
-            });
-          }
+              });
+            }
+          });
         }
 
         const hideWatched = Boolean(cachedSettings.hideWatched);
         const hideShorts = Boolean(cachedSettings.hideShorts);
         const onlyLive = Boolean(cachedSettings.onlyLive);
+
+        // Pre-hide unrelated Shorts shelves BEFORE video cards evaluation
+        const shelfSections = feedRoot.querySelectorAll(YT_DOM_SELECTORS.shelfSections.join(', '));
+        shelfSections.forEach(shelf => {
+          if (isFiltering || hideShorts) {
+            shelf.classList.add('yt-org-hidden');
+          } else {
+            shelf.classList.remove('yt-org-hidden');
+          }
+        });
+
         let visibleCardCount = 0;
+        const authorSelector = YT_DOM_SELECTORS.authorLinks.join(', ');
 
         videoCards.forEach(card => {
+          // If parent shelf is hidden, card is also hidden
+          if (card.closest('.yt-org-hidden')) {
+            return;
+          }
+
           // 1. Hide Watched Check
           if (hideWatched) {
             const hasProgress = card.querySelector(
@@ -599,42 +873,48 @@
             card.classList.remove('yt-org-hidden-nonlive');
           }
 
-          // 4. Folder Channel Filter Check
-          if (activeFilterFolderId === 'all') {
-            card.classList.remove('yt-org-hidden');
-          } else {
-            const channelLinks = card.querySelectorAll(
-              'a[href*="/@"], a[href*="/channel/"], ytd-channel-name a, #channel-name a, a#avatar-link, .yt-core-attributed-string a'
-            );
+          // 4. Folder Channel Filter & Focus Mute Check
+          // Only inspect author links, preventing video title @mention penetrations
+          const channelLinks = card.querySelectorAll(authorSelector);
+          let matchedMute = false;
+          let matchedAllowed = false;
 
-            let matched = false;
-            for (const link of channelLinks) {
-              const href = (link.getAttribute('href') || '').toLowerCase();
-              const text = (link.textContent || '').toLowerCase().trim();
+          for (const link of channelLinks) {
+            const href = (link.getAttribute('href') || '').toLowerCase();
+            const text = (link.textContent || '').toLowerCase().trim();
 
-              const handleMatch = href.match(/\/@([^\/\?]+)/);
-              if (handleMatch && allowedHandles.has(handleMatch[1])) {
-                matched = true;
-                break;
-              }
+            const handleMatch = href.match(/\/@([^\/\?]+)/);
+            const h = handleMatch ? handleMatch[1] : '';
 
-              const idMatch = href.match(/\/channel\/([^\/\?]+)/);
-              if (idMatch && allowedIds.has(idMatch[1])) {
-                matched = true;
-                break;
-              }
+            const idMatch = href.match(/\/channel\/([^\/\?]+)/);
+            const cid = idMatch ? idMatch[1] : '';
 
-              if (text && allowedNames.has(text)) {
-                matched = true;
+            // Check muted first
+            if (mutedFilterFolderIds.size > 0) {
+              if ((h && mutedHandles.has(h)) || (cid && mutedIds.has(cid)) || (text && mutedNames.has(text))) {
+                matchedMute = true;
                 break;
               }
             }
 
-            if (matched) {
+            // Check allowed
+            if (isFiltering) {
+              if ((h && allowedHandles.has(h)) || (cid && allowedIds.has(cid)) || (text && allowedNames.has(text))) {
+                matchedAllowed = true;
+              }
+            }
+          }
+
+          if (matchedMute) {
+            card.classList.add('yt-org-hidden');
+          } else if (isFiltering) {
+            if (matchedAllowed) {
               card.classList.remove('yt-org-hidden');
             } else {
               card.classList.add('yt-org-hidden');
             }
+          } else {
+            card.classList.remove('yt-org-hidden');
           }
 
           // Count visible cards
@@ -642,27 +922,19 @@
                            card.classList.contains('yt-org-hidden-watched') ||
                            card.classList.contains('yt-org-hidden-shorts') ||
                            card.classList.contains('yt-org-hidden-nonlive');
-          if (!isHidden) {
+          if (!isHidden && !card.closest('.yt-org-hidden')) {
             visibleCardCount++;
           }
         });
 
-        // 5. Hide unrelated Shorts shelves when filtering by folder or hideShorts is active
-        const shelfSections = feedRoot.querySelectorAll('ytd-rich-section-renderer, ytd-reel-shelf-renderer');
-        shelfSections.forEach(shelf => {
-          if (activeFilterFolderId !== 'all' || hideShorts) {
-            shelf.classList.add('yt-org-hidden');
-          } else {
-            shelf.classList.remove('yt-org-hidden');
-          }
-        });
-
         // 6. Empty State Display
-        handleFeedEmptyState(visibleCardCount);
+        handleFeedEmptyState(visibleCardCount, isFiltering || mutedFilterFolderIds.size > 0);
 
         // 7. Prevent Feed Starvation / Broken Infinite Scroll (Scroll Pump)
-        if ((activeFilterFolderId !== 'all' || hideShorts || hideWatched || onlyLive) && visibleCardCount < 6) {
+        if ((isFiltering || mutedFilterFolderIds.size > 0 || hideShorts || hideWatched || onlyLive) && visibleCardCount < 6) {
           pumpFeedIfNeeded(visibleCardCount);
+        } else if (visibleCardCount >= 6) {
+          pumpAttempts = 0;
         }
 
       } finally {
@@ -671,14 +943,19 @@
     });
   }
 
-  function handleFeedEmptyState(visibleCount) {
+  function handleFeedEmptyState(visibleCount, hasFolderOrMuteFilter) {
     const richGrid = document.querySelector('ytd-browse ytd-rich-grid-renderer, ytd-rich-grid-renderer');
     if (!richGrid) return;
 
     let emptyEl = document.getElementById('yt-org-feed-empty-state');
+    const isFiltered = hasFolderOrMuteFilter || cachedSettings.hideWatched || cachedSettings.hideShorts || cachedSettings.onlyLive;
 
-    if (activeFilterFolderId !== 'all' && visibleCount === 0) {
-      const folder = cachedFolders.find(f => f.id === activeFilterFolderId);
+    if (isPumping && visibleCount === 0) {
+      if (emptyEl) emptyEl.style.display = 'none';
+      return;
+    }
+
+    if (isFiltered && visibleCount === 0) {
       if (!emptyEl) {
         emptyEl = document.createElement('div');
         emptyEl.id = 'yt-org-feed-empty-state';
@@ -689,13 +966,31 @@
           richGrid.appendChild(emptyEl);
         }
       }
+
+      let emptyMsg = '目前沒有符合條件的最新影片，或已全部觀看。';
+      if (selectedFilterFolderIds.size === 1) {
+        const folder = cachedFolders.find(f => selectedFilterFolderIds.has(f.id));
+        const display = getFolderDisplay(folder);
+        emptyMsg = `${escapeHtml(display.icon)} <strong>「${escapeHtml(display.name)}」</strong> 目前沒有符合條件的最新影片，或已全部觀看。`;
+      } else if (selectedFilterFolderIds.size > 1) {
+        emptyMsg = `📁 目前所選的 <strong>${selectedFilterFolderIds.size} 個分組</strong> 中沒有符合條件的最新影片。`;
+      } else if (activeFilterFolderId !== 'all') {
+        const folder = cachedFolders.find(f => f.id === activeFilterFolderId);
+        const display = getFolderDisplay(folder);
+        emptyMsg = `${escapeHtml(display.icon)} <strong>「${escapeHtml(display.name)}」</strong> 目前沒有符合條件的最新影片，或已全部觀看。`;
+      } else if (cachedSettings.onlyLive) {
+        emptyMsg = `🔴 目前訂閱頻道中尚無正在進行的直播節目。`;
+      }
+
       emptyEl.innerHTML = `
-        <div>${escapeHtml(folder?.icon || '📁')} <strong>「${escapeHtml(folder?.name || '')}」</strong> 目前沒有符合條件的最新影片，或已全部觀看。</div>
-        <button class="yt-org-empty-reset-btn" id="yt-org-empty-reset-btn">查看全部動態</button>
+        <div>${emptyMsg}</div>
+        <button class="yt-org-empty-reset-btn" id="yt-org-empty-reset-btn">重設條件並檢視全部動態</button>
       `;
       const resetBtn = emptyEl.querySelector('#yt-org-empty-reset-btn');
       if (resetBtn) {
         resetBtn.onclick = () => {
+          selectedFilterFolderIds.clear();
+          mutedFilterFolderIds.clear();
           activeFilterFolderId = 'all';
           YTFolderStorage.updateSettings({ activeFeedFolderId: 'all' });
           updateFeedFilterChipsUI();
@@ -721,7 +1016,9 @@
     if (isPumping) return;
     if (!window.location.pathname.startsWith('/feed/subscriptions')) return;
 
-    const currentKey = `${activeFilterFolderId}_${cachedSettings.hideShorts}_${cachedSettings.hideWatched}_${cachedSettings.onlyLive}`;
+    const selTokens = Array.from(selectedFilterFolderIds).sort().join(',');
+    const muteTokens = Array.from(mutedFilterFolderIds).sort().join(',');
+    const currentKey = `${activeFilterFolderId}_${selTokens}_${muteTokens}_${cachedSettings.hideShorts}_${cachedSettings.hideWatched}_${cachedSettings.onlyLive}`;
     if (lastPumpKey !== currentKey) {
       lastPumpKey = currentKey;
       pumpAttempts = 0;
@@ -779,11 +1076,12 @@
           const folderIdx = num - 1;
           if (cachedFolders && cachedFolders[folderIdx]) {
             const folder = cachedFolders[folderIdx];
+            const display = getFolderDisplay(folder);
             activeFilterFolderId = folder.id;
             YTFolderStorage.updateSettings({ activeFeedFolderId: folder.id });
             updateFeedFilterChipsUI();
             applyFeedFilters();
-            showToast(`快捷鍵 Alt+${num}：切換至【${folder.name}】`);
+            showToast(`快捷鍵 Alt+${num}：切換至【${display.name}】`);
           }
         }
       }
@@ -838,14 +1136,21 @@
         <span>選擇「${safeChannelDisplayName}」的分組</span>
         <span style="font-size: 12px; cursor: pointer; color: #ff0033;" id="yt-org-floating-dropdown-close">關閉 ✕</span>
       </div>
+      <div class="yt-org-dropdown-quick-add">
+        <input type="text" class="yt-org-dropdown-quick-input" id="yt-org-dropdown-quick-input" placeholder="➕ 快速建立新分組..." />
+        <button class="yt-org-dropdown-quick-btn" id="yt-org-dropdown-quick-btn">建立</button>
+      </div>
       <div class="yt-org-dropdown-list">
-        ${cachedFolders.map(folder => {
+        ${cachedFolders.length === 0 ? `
+          <div style="padding: 12px; text-align: center; font-size: 12px; opacity: 0.7;">尚未建立分組，請在上方輸入名稱新增！</div>
+        ` : cachedFolders.map(folder => {
           const isChecked = memberFolderIds.includes(folder.id);
-          const safeFolderName = escapeHtml(folder.name);
+          const display = getFolderDisplay(folder);
+          const safeFolderName = escapeHtml(display.name);
           return `
             <label class="yt-org-dropdown-item">
               <input type="checkbox" class="yt-org-floating-folder-checkbox" data-folder-id="${escapeHtml(folder.id)}" ${isChecked ? 'checked' : ''} />
-              <span>${escapeHtml(folder.icon || '📁')}</span>
+              <span>${escapeHtml(display.icon)}</span>
               <span class="yt-org-dropdown-item-name">${safeFolderName}</span>
             </label>
           `;
@@ -863,6 +1168,34 @@
       dropdown.classList.remove('show');
     };
 
+    const quickInput = dropdown.querySelector('#yt-org-dropdown-quick-input');
+    const quickBtn = dropdown.querySelector('#yt-org-dropdown-quick-btn');
+    const handleQuickAddFolder = async () => {
+      const name = (quickInput?.value || '').trim();
+      if (!name) return;
+      try {
+        const newFolder = await YTFolderStorage.addFolder({ name });
+        if (newFolder && newFolder.id) {
+          await YTFolderStorage.addChannelToFolder(newFolder.id, channelInfo);
+          showToast(`已建立新分組「${name}」並已將此頻道加入！`);
+          await loadData();
+          injectSidebarSection();
+          updateTaggerButtonAppearance(btn, channelInfo);
+          openChannelFolderDropdown(btn, channelInfo);
+        }
+      } catch (err) {
+        showToast('建立分組失敗，請重試');
+      }
+    };
+
+    if (quickBtn) quickBtn.onclick = handleQuickAddFolder;
+    if (quickInput) {
+      quickInput.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') handleQuickAddFolder();
+      };
+    }
+
     dropdown.querySelectorAll('.yt-org-floating-folder-checkbox').forEach(chk => {
       chk.onchange = async () => {
         const folderId = chk.dataset.folderId;
@@ -870,6 +1203,7 @@
         const folder = cachedFolders.find(f => f.id === folderId);
         showToast(added ? `已將頻道加入「${folder?.name}」` : `已自「${folder?.name}」移除頻道`);
         await loadData();
+        injectSidebarSection();
         updateTaggerButtonAppearance(btn, channelInfo);
       };
     });
@@ -900,9 +1234,27 @@
   }
 
   function getPageSubscriptionState() {
-    const subBtn = document.querySelector(
-      'yt-subscribe-button-view-model button, subscribe-button-view-model button, #owner #subscribe-button button, ytd-subscribe-button-renderer button, #subscribe-button button'
+    const candidates = document.querySelectorAll(
+      YT_DOM_SELECTORS.subscribeButtons.join(', ')
     );
+    let subBtn = null;
+    for (const btn of candidates) {
+      // Isolate hidden DOM containers from SPA cache
+      if (btn.closest('[hidden], ytd-browse[hidden], ytd-watch-flexy[hidden]')) continue;
+      const rect = btn.getBoundingClientRect();
+      if (rect.width > 0 || rect.height > 0) {
+        subBtn = btn;
+        break;
+      }
+    }
+    if (!subBtn && candidates.length > 0) {
+      for (const btn of candidates) {
+        if (!btn.closest('[hidden], ytd-browse[hidden], ytd-watch-flexy[hidden]')) {
+          subBtn = btn;
+          break;
+        }
+      }
+    }
     if (!subBtn) return 'UNKNOWN';
 
     const text = (subBtn.textContent || '').trim();
@@ -925,18 +1277,8 @@
   async function updateTaggerButtonAppearance(btn, channelInfo) {
     if (!btn || !channelInfo) return;
 
-    const subState = getPageSubscriptionState();
-    let memberFolderIds = getCachedFolderIdsByChannel(channelInfo.id, channelInfo.handle);
-
-    // If channel is definitely unsubscribed on YouTube, it MUST NOT be in any folder!
-    if (subState === 'UNSUBSCRIBED' && memberFolderIds.length > 0) {
-      await YTFolderStorage.removeChannelFromAllFolders(channelInfo.id, channelInfo.handle, channelInfo.name);
-      await loadData();
-      injectSidebarSection();
-      memberFolderIds = [];
-    }
-
-    const hasFolders = memberFolderIds.length > 0 && subState !== 'UNSUBSCRIBED';
+    const memberFolderIds = getCachedFolderIdsByChannel(channelInfo.id, channelInfo.handle);
+    const hasFolders = memberFolderIds.length > 0;
     btn.className = `yt-org-channel-tagger-btn ${hasFolders ? 'has-folders' : ''}`;
     btn.innerHTML = `
       <span>📁</span>
@@ -1082,18 +1424,32 @@
     const handleMatch = window.location.pathname.match(/^\/(@[^\/\?]+)/);
     if (handleMatch) {
       handle = handleMatch[1];
+      // Resolve canonical ID from local cache if known, avoiding stale <head> meta tag from previous SPA page
+      if (cachedChannels) {
+        const normH = handle.toLowerCase();
+        const existing = Object.values(cachedChannels).find(c =>
+          (c.handle && c.handle.toLowerCase() === normH) ||
+          (c.id && c.id.toLowerCase() === normH)
+        );
+        if (existing && existing.id && existing.id.startsWith('UC')) {
+          id = existing.id;
+        }
+      }
     }
 
-    const channelMeta = document.querySelector('meta[itemprop="channelId"]') ||
-                        document.querySelector('meta[name="channelId"]');
-    if (channelMeta) {
-      id = channelMeta.getAttribute('content');
-    }
+    // Only query <head> meta tags if not already identifiable by @handle
+    if (!handle) {
+      const channelMeta = document.querySelector('meta[itemprop="channelId"]') ||
+                          document.querySelector('meta[name="channelId"]');
+      if (channelMeta) {
+        id = channelMeta.getAttribute('content');
+      }
 
-    if (!id) {
-      const canonicalLink = document.querySelector('link[rel="canonical"]');
-      const m = canonicalLink?.getAttribute('href')?.match(/channel\/(UC[a-zA-Z0-9_-]{22})/);
-      if (m) id = m[1];
+      if (!id) {
+        const canonicalLink = document.querySelector('link[rel="canonical"]');
+        const m = canonicalLink?.getAttribute('href')?.match(/channel\/(UC[a-zA-Z0-9_-]{22})/);
+        if (m) id = m[1];
+      }
     }
 
     if (!id) {
@@ -1137,6 +1493,16 @@
         const handleMatch = href.match(/\/@([^\/\?]+)/);
         if (handleMatch) {
           handle = `@${handleMatch[1]}`;
+          if (cachedChannels) {
+            const normH = handle.toLowerCase();
+            const existing = Object.values(cachedChannels).find(c =>
+              (c.handle && c.handle.toLowerCase() === normH) ||
+              (c.id && c.id.toLowerCase() === normH)
+            );
+            if (existing && existing.id && existing.id.startsWith('UC')) {
+              id = existing.id;
+            }
+          }
         }
         const idMatch = href.match(/\/channel\/([^\/\?]+)/);
         if (idMatch) {
@@ -1146,8 +1512,8 @@
       }
     }
 
-    // 2. Canonical author link in <head>
-    if (!id) {
+    // 2. Only inspect <head> if neither id nor handle was discovered in owner DOM
+    if (!id && !handle) {
       const headAuthorLink = document.querySelector('link[itemprop="url"][href*="/channel/"], link[rel="canonical"][href*="/channel/"]');
       if (headAuthorLink) {
         const href = headAuthorLink.getAttribute('href') || '';
@@ -1156,17 +1522,16 @@
           id = idMatch[1];
         }
       }
-    }
 
-    // 3. Meta channelId in <head>
-    if (!id) {
-      const metaId = document.querySelector('meta[itemprop="channelId"]');
-      if (metaId && metaId.getAttribute('content')) {
-        id = metaId.getAttribute('content');
+      if (!id) {
+        const metaId = document.querySelector('meta[itemprop="channelId"]');
+        if (metaId && metaId.getAttribute('content')) {
+          id = metaId.getAttribute('content');
+        }
       }
     }
 
-    // 4. Channel name text
+    // 3. Channel name text
     if (!name) {
       const nameEl = ownerEl?.querySelector('#attributed-channel-name, #channel-name, ytd-channel-name') ||
                      document.querySelector('ytd-watch-metadata #owner #upload-info') ||
@@ -1177,7 +1542,7 @@
       }
     }
 
-    // 5. Avatar image
+    // 4. Avatar image
     if (ownerEl) {
       const imgEl = ownerEl.querySelector('#avatar img, img');
       if (imgEl && imgEl.src) {
@@ -1311,19 +1676,17 @@
     }
   }, true);
 
-  // Listen for YouTube's native Unsubscribe Confirmation Dialog button click & Menu items
+  // Listen for YouTube's native Unsubscribe Confirmation Dialog button click
   document.addEventListener('click', async (e) => {
-    // 1. Confirm dialog button
-    const isDialogConfirm = e.target.closest('#confirm-button, [dialog-confirm]') ||
-      (e.target.closest('yt-confirm-dialog-renderer, ytd-confirm-dialog-renderer, tp-yt-paper-dialog, ytd-popup-container') &&
-       /取消訂閱|unsubscribe/i.test(e.target.textContent || '') &&
-       !/取消$|cancel/i.test(e.target.textContent || ''));
+    // Only trigger when user confirms unsubscription in YouTube's confirmation dialog
+    const dialog = e.target.closest('yt-confirm-dialog-renderer, ytd-confirm-dialog-renderer, tp-yt-paper-dialog');
+    if (!dialog) return;
 
-    // 2. Dropdown menu item or button explicitly labeled "取消訂閱"
-    const isUnsubMenuItem = e.target.closest('ytd-menu-service-item-renderer, tp-yt-paper-item') &&
-      /取消訂閱|unsubscribe/i.test(e.target.textContent || '');
+    const confirmBtn = e.target.closest('#confirm-button, [dialog-confirm], button');
+    if (!confirmBtn) return;
 
-    if (!isDialogConfirm && !isUnsubMenuItem) return;
+    const btnText = (confirmBtn.textContent || confirmBtn.getAttribute('aria-label') || '').trim();
+    if (!/取消訂閱|unsubscribe/i.test(btnText) || /^取消$|^cancel$/i.test(btnText)) return;
 
     let targetChannel = null;
 
@@ -1333,8 +1696,7 @@
     }
 
     // Parse from dialog text: e.g. 要取消訂閱「頻道名稱」嗎？ or Unsubscribe from ChannelName?
-    const dialog = e.target.closest('yt-confirm-dialog-renderer, ytd-confirm-dialog-renderer, tp-yt-paper-dialog, ytd-popup-container');
-    const dialogText = dialog?.textContent || '';
+    const dialogText = dialog.textContent || '';
     let parsedName = '';
     const zhMatch = dialogText.match(/要取消訂閱「([^」]+)」/);
     if (zhMatch) parsedName = zhMatch[1].trim();
@@ -1414,25 +1776,8 @@
     lastMonitoredChannelKey = channelKey;
 
     const taggerBtn = document.getElementById('yt-org-tagger-toggle-btn');
-
-    if (subState === 'UNSUBSCRIBED') {
-      const memberFolderIds = getCachedFolderIdsByChannel(channelInfo.id, channelInfo.handle);
-      if (memberFolderIds.length > 0 || (taggerBtn && taggerBtn.classList.contains('has-folders'))) {
-        const res = await YTFolderStorage.removeChannelFromAllFolders(channelInfo.id, channelInfo.handle, channelInfo.name);
-        await loadData();
-        injectSidebarSection();
-        if (taggerBtn) {
-          taggerBtn.className = 'yt-org-channel-tagger-btn';
-          taggerBtn.innerHTML = `<span>📁</span><span>加入分組</span><span style="font-size: 10px; margin-left: 2px;">▼</span>`;
-        }
-        if (res && res.removedCount > 0) {
-          showToast(`已取消訂閱「${channelInfo.name || channelInfo.handle}」，並已同步自 ${res.removedCount} 個分組移除。`);
-        }
-      }
-    } else if (subState === 'SUBSCRIBED') {
-      if (taggerBtn) {
-        updateTaggerButtonAppearance(taggerBtn, channelInfo);
-      }
+    if (taggerBtn) {
+      updateTaggerButtonAppearance(taggerBtn, channelInfo);
     }
   }
 

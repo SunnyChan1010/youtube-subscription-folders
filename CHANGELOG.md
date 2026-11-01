@@ -4,6 +4,44 @@
 
 ---
 
+## [1.3.0] - 2026-11-01
+
+### 🚀 新增功能 (Added)
+- **智慧自動歸類引擎 (`autoKeywords`)**：
+  - 分組支援設定關鍵字清單（例如 `AI, LLM, GPT`），新同步頻道時自動比對頻道標題與 Handle，純本地 0 延遲自動歸類，大幅降低新訂閱整理負擔。
+- **動態牆多分組並集過濾與專注屏蔽模式 (Multi-Folder Union & Focus Mute Mode)**：
+  - 動態牆頂部 Chips 支援多選分組聯集顯示，並可將特定分組設為「屏蔽（Muted）」，徹底淨化訂閱動態牆。
+  - 切換過濾條件時自動重置滾動推進狀態計數器（`pumpAttempts = 0`），徹底杜絕不同分組間的飢餓判定污染。
+- **緊湊分片雲端同步 (Compact Sharded Cloud Sync)**：
+  - 透過 `chrome.storage.sync` 實作自動分片骨架（`<8KB` 分片單元），支援跨設備跨瀏覽器同步分組配置與頻道映射，並具備縮容清理（Purge Obsolete Chunks）自癒機制。
+  - 同步彈窗確認流程升級：點擊取消（Cancel）時安全終止流程，杜絕誤操作覆蓋。
+- **後台批次操作工具列 (Options Bulk Action Bar)**：
+  - 支援核取方塊全選與 `Shift + Click` 連續選取多個頻道，提供「批次移動至分組」與「批次自當前分組移出」浮動操作列。
+  - 切換分組資料夾時自動清空歷史勾選集合，杜絕幽靈選取跨組誤傷。
+- **Popup 工具列行內非阻塞快速建組**：
+  - 徹底移除阻塞式的 `window.prompt()`，改為行內平滑輸入框，支援 `Enter` 快速建組與 `Escape` 取消。
+
+### 🛡️ 架構重構與防禦加固 (Architectural Resilience)
+- **可重入非同步互斥鎖 (`withStorageLock`) 全面守護**：
+  - 將所有存儲讀寫操作（包括批量添加、移動、刪除、雲端同步等）納入 FIFO 互斥佇列，徹底根除並發 Read-Modify-Write 競爭丟失問題。
+- **分頁中斷防禦守衛 (`isComplete`) 與超時熔斷**：
+  - 在 `extractAllSubscribedChannels` 引入 `isComplete` 嚴格旗標，當 YouTube InnerTube API 網路中斷或分頁異常時，嚴禁以殘缺數據覆蓋未分類頻道列表。
+  - 全專案網路請求全面受 `fetchWithTimeout`（10s~60s）嚴密守護，徹底消除無限掛死。
+- **集中式 DOM 選擇器登錄檔 (`YT_DOM_SELECTORS`)**：
+  - 收斂 `content.js` 零散選擇器至頂層單一真相來源，增強對 YouTube 改版之容錯防禦與快速適配能力。
+- **標籤注入解耦防禦**：
+  - 拔除頻道標籤注入器（Tagger）對退訂頻道的被動隱式刪除，避免因 YouTube DOM 延遲渲染或元件回收而誤刪真實訂閱。
+- **獨立全域圖片錯誤防禦**：
+  - 圖片降級監聽器獨立掛載，404 時自動平滑降級至本地高解析 SVG Data URI，不再依賴外部 CDN。
+
+### ⚡ 效能與代碼減負 (Performance & Doing Subtraction)
+- **刪除冗餘資產 `scripts/initial_data.json`**：
+  - 遵循減法原則，刪除重複的 JSON 靜態檔案，由 `scripts/initial_data.js` 的 `YTFolderUtils` 統一維護核心消毒與常數單一真相源。
+- **跨別名 (`@handle` 與 `UC...`) 雙向索引原子操作**：
+  - 於 `batchMoveChannels` 與 `batchRemoveChannelsFromFolder` 建立雙向查詢雜湊表，單次批次處理僅需 **1 次原子磁碟寫入**，徹底告別 N+1 磁碟寫入風暴。
+
+---
+
 ## [1.2.0] - 2026-10-14
 
 ### 🛡️ 架構重構與穩定性防線 (Architectural Resilience)

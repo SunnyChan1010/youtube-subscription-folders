@@ -859,10 +859,15 @@ const YTSubscriptionService = (() => {
         channelIds,
         handles,
         channelsList: [],
-        isLoggedIn: false
+        isLoggedIn: false,
+        isComplete: false,
+        fetchError: 'NO_SAPISID'
       };
       return cachedSubscribedChannels;
     }
+
+    let isComplete = false;
+    let fetchError = null;
 
     try {
       const authHeader = await getSapisidHash(session.sapisid, 'https://www.youtube.com');
@@ -904,7 +909,8 @@ const YTSubscriptionService = (() => {
 
         let continuationToken = extractContinuationToken(json);
         let pageCount = 0;
-        const maxPages = 35;
+        const maxPages = 60; // Elevated to 60 pages (~4,000+ subscriptions)
+        let paginationBroken = false;
 
         while (continuationToken && pageCount < maxPages) {
           pageCount++;
@@ -930,21 +936,38 @@ const YTSubscriptionService = (() => {
               body: JSON.stringify(contPayload)
             }, 12000);
 
-            if (!contResp.ok) break;
+            if (!contResp.ok) {
+              paginationBroken = true;
+              fetchError = `HTTP_${contResp.status}_AT_PAGE_${pageCount}`;
+              break;
+            }
 
             const contJson = await contResp.json();
             extractChannelsFromBrowseData(contJson, channelIds, handles, channelsMap);
             const nextToken = extractContinuationToken(contJson);
-            if (!nextToken || nextToken === continuationToken) break;
+            if (!nextToken || nextToken === continuationToken) {
+              continuationToken = null;
+              break;
+            }
             continuationToken = nextToken;
           } catch (pErr) {
             console.warn('[YTSubscriptionService] Error fetching continuation page:', pErr);
+            paginationBroken = true;
+            fetchError = pErr.message || 'PAGINATION_TIMEOUT';
             break;
           }
         }
+
+        isComplete = !paginationBroken && !continuationToken;
+        if (!isComplete && !fetchError && continuationToken) {
+          fetchError = 'MAX_PAGES_REACHED';
+        }
+      } else {
+        fetchError = `HTTP_${resp.status}`;
       }
     } catch (err) {
       console.error('[YTSubscriptionService] Error fetching subscriptions:', err);
+      fetchError = err.message || 'REQUEST_FAILED';
     }
 
     const channelsList = Array.from(channelsMap.values());
@@ -959,21 +982,32 @@ const YTSubscriptionService = (() => {
       }
     }
 
-    cachedSubscribedChannels = {
+    const isAuthError = Boolean(fetchError && (fetchError.includes('401') || fetchError.includes('403') || fetchError === 'NO_SAPISID'));
+    const isLoggedIn = !isAuthError && Boolean(session && session.sapisid);
+
+    const result = {
       channelIds,
       handles,
       channelsList,
-      isLoggedIn: true
+      isLoggedIn,
+      isComplete,
+      fetchError
     };
-    lastSubscribedFetchTime = Date.now();
 
-    return cachedSubscribedChannels;
+    if (isComplete) {
+      cachedSubscribedChannels = result;
+      lastSubscribedFetchTime = Date.now();
+    } else {
+      cachedSubscribedChannels = null;
+    }
+
+    return result;
   }
 
   /**
    * Fetches user's currently subscribed channels directly from YouTube InnerTube browse API
    */
-  async function fetchSubscribedChannels(forceRefresh = false) {
+  async function fetchSubscribedChannels(forceRefresh = false, options = {}) {
     if (!forceRefresh && cachedSubscribedChannels && (Date.now() - lastSubscribedFetchTime < 180000)) {
       return cachedSubscribedChannels;
     }
@@ -982,8 +1016,14 @@ const YTSubscriptionService = (() => {
       return await executeFetchSubscribedChannelsDirect(forceRefresh);
     }
 
-    // In extension context: try delegating to YouTube tab (60s timeout to accommodate up to 35 continuation pages)
-    let tabContext = await acquireExecutionTab();
+    // In extension context: try delegating to YouTube tab (60s timeout to accommodate continuation pages)
+    let tabContext = options.tabContext || null;
+    let shouldReleaseTab = false;
+    if (!tabContext) {
+      tabContext = await acquireExecutionTab();
+      shouldReleaseTab = true;
+    }
+
     if (tabContext && tabContext.tabId) {
       try {
         const res = await new Promise((resolve) => {
@@ -1017,17 +1057,27 @@ const YTSubscriptionService = (() => {
               }
             }
           }
-          cachedSubscribedChannels = {
+          const isComplete = res.isComplete !== false;
+          const result = {
             channelIds,
             handles,
             channelsList,
-            isLoggedIn: res.isLoggedIn !== false
+            isLoggedIn: res.isLoggedIn !== false,
+            isComplete,
+            fetchError: res.fetchError || null
           };
-          lastSubscribedFetchTime = Date.now();
-          return cachedSubscribedChannels;
+          if (isComplete) {
+            cachedSubscribedChannels = result;
+            lastSubscribedFetchTime = Date.now();
+          } else {
+            cachedSubscribedChannels = null;
+          }
+          return result;
         }
       } finally {
-        await releaseExecutionTab(tabContext);
+        if (shouldReleaseTab && tabContext) {
+          await releaseExecutionTab(tabContext);
+        }
       }
     }
 
@@ -1190,12 +1240,14 @@ const YTSubscriptionService = (() => {
    *   subscribed: [...],            // in backup & currently subscribed on YouTube
    *   unsubscribed: [...],          // in backup & NOT yet subscribed on YouTube
    *   redundantSubscribed: [...],   // currently subscribed on YouTube & NOT in backup
-   *   isLoggedIn: boolean
+   *   isLoggedIn: boolean,
+   *   isComplete: boolean,
+   *   fetchError: string|null
    * }
    */
-  async function compareSubscriptions(channelsList) {
-    const subsData = await fetchSubscribedChannels();
-    const { channelIds, handles, channelsList: liveChannelsList, isLoggedIn } = subsData;
+  async function compareSubscriptions(channelsList, options = {}) {
+    const subsData = await fetchSubscribedChannels(false, options);
+    const { channelIds, handles, channelsList: liveChannelsList, isLoggedIn, isComplete = true, fetchError = null } = subsData;
 
     const subscribed = [];
     const unsubscribed = [];
@@ -1255,7 +1307,9 @@ const YTSubscriptionService = (() => {
       unsubscribed,
       redundantSubscribed,
       liveChannelsList: liveChannelsList || [],
-      isLoggedIn
+      isLoggedIn,
+      isComplete: isComplete !== false,
+      fetchError: fetchError || null
     };
   }
 
@@ -1266,17 +1320,20 @@ const YTSubscriptionService = (() => {
   async function batchSubscribeWithProgress(channels, {
     delayMs = 500,
     onProgress = null,
-    shouldAbort = null
+    shouldAbort = null,
+    tabContext = null
   } = {}) {
     const results = [];
     let succeeded = 0;
     let failed = 0;
 
-    let tabContext = null;
-    if (!isYouTubePageContext()) {
-      tabContext = await acquireExecutionTab();
+    let ownTab = false;
+    let activeTabContext = tabContext;
+    if (!activeTabContext && !isYouTubePageContext()) {
+      activeTabContext = await acquireExecutionTab();
+      ownTab = true;
     }
-    const preferredTabId = tabContext ? tabContext.tabId : null;
+    const preferredTabId = activeTabContext ? activeTabContext.tabId : null;
 
     try {
       for (let i = 0; i < channels.length; i++) {
@@ -1328,8 +1385,8 @@ const YTSubscriptionService = (() => {
         }
       }
     } finally {
-      if (tabContext) {
-        await releaseExecutionTab(tabContext);
+      if (ownTab && activeTabContext) {
+        await releaseExecutionTab(activeTabContext);
       }
     }
 
@@ -1350,18 +1407,21 @@ const YTSubscriptionService = (() => {
     delayMs = 500,
     onProgress = null,
     shouldAbort = null,
-    skipStorageSync = false
+    skipStorageSync = false,
+    tabContext = null
   } = {}) {
     const results = [];
     const succeededChannels = [];
     let succeeded = 0;
     let failed = 0;
 
-    let tabContext = null;
-    if (!isYouTubePageContext()) {
-      tabContext = await acquireExecutionTab();
+    let ownTab = false;
+    let activeTabContext = tabContext;
+    if (!activeTabContext && !isYouTubePageContext()) {
+      activeTabContext = await acquireExecutionTab();
+      ownTab = true;
     }
-    const preferredTabId = tabContext ? tabContext.tabId : null;
+    const preferredTabId = activeTabContext ? activeTabContext.tabId : null;
 
     try {
       for (let i = 0; i < channels.length; i++) {
@@ -1416,8 +1476,8 @@ const YTSubscriptionService = (() => {
         }
       }
     } finally {
-      if (tabContext) {
-        await releaseExecutionTab(tabContext);
+      if (ownTab && activeTabContext) {
+        await releaseExecutionTab(activeTabContext);
       }
     }
 

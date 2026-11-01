@@ -17,6 +17,10 @@
       </div>
     </div>
     <div class="header-actions">
+      <button class="btn btn-secondary" id="btn-cloud-sync" title="透過 Chrome 雲端同步骨架 (chrome.storage.sync)">
+        <span>☁️</span>
+        <span>雲端同步</span>
+      </button>
       <button class="btn btn-secondary" id="btn-check-unsubscribed" title="檢查所有分組中已在 YouTube 取消訂閱的頻道並清理">
         <span>🔍</span>
         <span>檢查退訂頻道</span>
@@ -78,6 +82,21 @@
         <button class="btn btn-primary" id="btn-add-channel-submit">加入頻道</button>
       </div>
 
+      <!-- Bulk Action Bar -->
+      <div class="bulk-action-bar" id="bulk-action-bar" style="display: none; padding: 10px 16px; background: rgba(33, 150, 243, 0.08); border: 1px solid rgba(33, 150, 243, 0.25); border-radius: 8px; margin-bottom: 12px; align-items: center; justify-content: space-between;">
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <input type="checkbox" id="bulk-select-all" style="cursor: pointer;" />
+          <span id="bulk-selection-count" style="font-size: 13px; font-weight: 500;">已選擇 0 個頻道</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <select id="bulk-folder-select" class="input-text" style="font-size: 12.5px; padding: 4px 8px; width: 140px;">
+            <option value="">移動至分組...</option>
+          </select>
+          <button class="btn btn-secondary btn-xs" id="bulk-btn-apply-folder">移動</button>
+          <button class="btn btn-danger btn-xs" id="bulk-btn-remove-selected">自此分組移除</button>
+        </div>
+      </div>
+
       <div class="channels-grid-container">
         <div class="channels-grid" id="channels-grid-el">
           <!-- Channels list injected dynamically -->
@@ -101,6 +120,10 @@
       <div class="form-group">
         <label class="form-label">描述 / 標籤說明</label>
         <input type="text" class="input-text" id="modal-input-desc" placeholder="簡述此分組包含的內容主題..." />
+      </div>
+      <div class="form-group">
+        <label class="form-label">智慧自動歸類關鍵字 (以逗號分隔，新訂閱自動入組)</label>
+        <input type="text" class="input-text" id="modal-input-keywords" placeholder="例如: AI, 程式, Python, 科技" />
       </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="modal-btn-cancel">取消</button>

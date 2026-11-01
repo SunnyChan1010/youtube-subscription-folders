@@ -3,31 +3,36 @@ const YT_INITIAL_DATA = {
   "folders": [
     {
       "id": "folder_tech",
-      "name": "💻 科技 3C (Tech & AI)",
+      "icon": "💻",
+      "name": "科技 3C (Tech & AI)",
       "description": "科技最新資訊、AI 工具、軟硬體評測",
       "channels": []
     },
     {
       "id": "folder_gaming",
-      "name": "🎮 電玩遊戲 (Gaming)",
+      "icon": "🎮",
+      "name": "電玩遊戲 (Gaming)",
       "description": "遊戲實況、新遊試玩、遊戲攻略與精華",
       "channels": []
     },
     {
       "id": "folder_entertainment",
-      "name": "🎬 影視娛樂 (Cinema & Movies)",
+      "icon": "🎬",
+      "name": "影視娛樂 (Cinema & Movies)",
       "description": "電影影評、電視劇、流行影視解說",
       "channels": []
     },
     {
       "id": "folder_knowledge",
-      "name": "🧠 知識成長 (Productivity & Science)",
+      "icon": "🧠",
+      "name": "知識成長 (Productivity & Science)",
       "description": "科普知識、思維學習、生產力與個人成長",
       "channels": []
     },
     {
       "id": "folder_music",
-      "name": "🎵 音樂生活 (Music & Lifestyle)",
+      "icon": "🎵",
+      "name": "音樂生活 (Music & Lifestyle)",
       "description": "音樂串流、生活放鬆、日常休閒",
       "channels": []
     }
@@ -89,10 +94,13 @@ function sanitizeUrl(url) {
 
 function sanitizeAvatarUrl(url) {
   if (!url || typeof url !== 'string') return '';
-  const trimmed = url.trim();
+  let trimmed = url.trim();
   if (/[\s<>"'`]/.test(trimmed)) return '';
   if (/^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,[a-zA-Z0-9+/=]+$/i.test(trimmed)) {
     return trimmed;
+  }
+  if (/^\/\/(?:yt3\.googleusercontent\.com|yt3\.ggpht\.com)\//i.test(trimmed)) {
+    trimmed = 'https:' + trimmed;
   }
   if (/^https?:\/\//i.test(trimmed)) {
     try {
@@ -117,6 +125,44 @@ function sanitizeFolderIcon(icon) {
   return clean ? clean.slice(0, 10) : '📁';
 }
 
+const LEADING_EMOJI_RE = /^((?:[\u{1F1E6}-\u{1F1FF}]{2})|(?:(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\uFE0F)?(?:\u200D(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\uFE0F)?)*))\s*/u;
+
+function normalizeFolderIconAndName(rawName, rawIcon) {
+  let name = String(rawName || '').trim();
+  let icon = sanitizeFolderIcon(rawIcon);
+  const hasExplicitCustomIcon = Boolean(rawIcon && String(rawIcon).trim() && sanitizeFolderIcon(rawIcon) !== '📁');
+
+  const match = name.match(LEADING_EMOJI_RE);
+  if (match) {
+    const leadEmoji = match[1];
+    if (!hasExplicitCustomIcon || icon === leadEmoji) {
+      icon = sanitizeFolderIcon(leadEmoji);
+    }
+    if (icon === leadEmoji) {
+      while (true) {
+        const m = name.match(LEADING_EMOJI_RE);
+        if (m && m[1] === leadEmoji) {
+          const stripped = name.slice(m[0].length).trim();
+          if (stripped.length > 0) {
+            name = stripped;
+            continue;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  if (icon && name.startsWith(icon)) {
+    const stripped = name.slice(icon.length).trim();
+    if (stripped.length > 0) {
+      name = stripped;
+    }
+  }
+
+  return { icon, name };
+}
+
 function normalizeHandle(h) {
   if (!h) return '';
   return String(h).trim().toLowerCase().replace(/^@/, '');
@@ -128,6 +174,7 @@ const YTFolderUtils = {
   sanitizeAvatarUrl,
   sanitizeFolderColor,
   sanitizeFolderIcon,
+  normalizeFolderIconAndName,
   normalizeHandle,
   isSystemActionTitle
 };
