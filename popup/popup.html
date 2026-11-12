@@ -24,10 +24,20 @@
 
   <div class="stats-bar">
     <span id="stats-text">載入中...</span>
-    <label class="watched-toggle-label" title="在動態牆自動隱藏已看過的影片">
-      <input type="checkbox" id="chk-hide-watched" />
-      <span>隱藏已看</span>
-    </label>
+    <div class="stats-Quick-toggle">
+      <label class="watched-toggle-label" title="在動態牆自動隱藏已看過的影片">
+        <input type="checkbox" id="chk-hide-watched" />
+        <span>隱藏已觀看</span>
+      </label>
+      <label class="watched-toggle-label" title="在動態牆自動隱藏 Shorts 短片">
+        <input type="checkbox" id="chk-hide-shorts" />
+        <span>隱藏 Shorts</span>
+      </label>
+      <label class="watched-toggle-label" title="在動態牆僅顯示直播中影片">
+        <input type="checkbox" id="chk-only-live" />
+        <span>僅看直播</span>
+      </label>
+    </div>
   </div>
 
   <main class="folder-list-container" id="folder-list">

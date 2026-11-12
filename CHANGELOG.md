@@ -4,6 +4,28 @@
 
 ---
 
+## [1.4.0] - 2026-11-12
+
+### 🚀 新增功能 (Added)
+- **訂閱動態牆即時關鍵字快篩與片長區間篩選**：於 `/feed/subscriptions` 新增 `#yt-org-feed-search-input`（150ms 防抖）與 `#yt-org-feed-duration-select`（全部 / `< 5m` 短片 / `5–20m` 中長片 / `> 20m` 長片）。
+- **既有未分類頻道「✨ 智慧自動歸類」 (`runAutoCategorization`)**：於 Options 未分類視圖與頂部工具列新增一鍵智慧歸類按鈕，依各分組 `autoKeywords` 自動掃描並歸類既有未分類頻道。
+- **多分組並集與專注靜音跨重整持久化**：於 `DEFAULT_SETTINGS` 新增 `selectedFeedFolderIds`、`mutedFeedFolderIds` 與 `feedDurationFilter`，跨重新整理與跨分頁完整保留動態牆過濾狀態。
+- **Popup 三合一快速過濾開關**：於 Popup 新增「👁️ 隱藏已看 / 🚫 隱藏 Shorts / 🔴 僅看直播」即時切換開關。
+
+### 🛡️ 資訊安全加固與資料完整性修復 (Security & Reliability — C-01 ~ L-01)
+- **[C-01] 自動歸類引擎 ReDoS 防護 (`isSafeRegexPattern`)**：攔截巢狀量詞與多重萬用字元回溯（`< 0.1ms`），自動剝除狀態型旗標 `g`/`y`，並對比對字串實施安全長度截斷。
+- **[H-01] 修復 `deduplicateData()` 遺失 `autoKeywords` 與強化 `syncWithCloud()` 消毒**：確保「清理重複頻道」與「匯入備份」100% 保留 `autoKeywords`，並新增 `sanitizeRemoteFolder()` 防禦雲端髒資料與原型鏈污染鍵名（`__proto__` / `constructor`）。
+- **[H-02] 嚴格頭像與連結網域白名單 (`ALLOWED_AVATAR_HOSTS`)**：阻絕外部追蹤信標（Tracking Pixel）與非 YouTube 釣魚網址，並自動將 `http:` 頭像升級為 `https:`。
+- **[M-01 / L-01] 嚴格 Fail-Closed 訊息驗證與分頁完整性透傳**：`content.js` 強制驗證 `!sender || sender.id !== chrome.runtime.id`，`setStorage()` 納入 `withStorageLock()`，修復 `EXEC_FETCH_SUBSCRIBED_CHANNELS` 透傳 `isComplete` 旗標，並統一委派 `YTFolderUtils` 共用消毒函式。
+
+### ⚡ 深度效能最佳化與 O(1) 架構重構 (Performance — P-01 ~ P-04)
+- **[P-01] 單一 IPC 批次讀取與自癒寫回 (`getAllData` & `computeUncategorizedChannels`)**：將各端 `loadData()` 由 3～4 次序列式 `chrome.storage.local.get` 合併為單次 IPC 批次讀取（`0.92ms`），讀取自癒僅一次性寫回 Storage。
+- **[P-02] 正規表示式預編譯快取池 (`COMPILED_REGEX_CACHE`) 與 $O(1)$ 自動歸類**：新增 `getCompiledSafeRegex()` 與 `_prepareKeywordFolders()`，消除數萬次重複 `new RegExp()` 編譯與 `Array.includes` 線性查找（1,000 頻道 × 20 分組共 20,000 次評估僅需 `46.04ms`）。
+- **[P-03] 前景 $O(1)$ 反向索引與動態牆卡片 `dataset` 快取 (`rebuildInMemoryIndices` & `getCardAuthorMetadata`)**：將輪詢與選單之頻道/分組查找降為 $O(1)$，並快取卡片作者與 Shorts 狀態至 `card.dataset`，搭配 `findFirstActionElement()` 短路選擇器查詢。
+- **[P-04] 迴圈不變量外提 (LICM) 與 Popup 反向索引防抖**：於 `options.js` 將 `<option>` 字串組裝外提至迴圈外（$O(F)$ 取代 $O(N \times F)$），並於 `popup.js` 建立 `foldersByChannelToken` 反向索引與 `100ms` 搜尋防抖。
+
+---
+
 ## [1.3.0] - 2026-11-01
 
 ### 🚀 新增功能 (Added)

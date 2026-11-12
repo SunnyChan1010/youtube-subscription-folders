@@ -20,6 +20,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statsTextEl = document.getElementById('stats-text');
   const searchInput = document.getElementById('search-input');
   const chkHideWatched = document.getElementById('chk-hide-watched');
+  const chkHideShorts = document.getElementById('chk-hide-shorts');
+  const chkOnlyLive = document.getElementById('chk-only-live');
   const btnOpenFeed = document.getElementById('btn-open-feed');
   const btnOpenOptions = document.getElementById('btn-open-options');
   const btnAddFolder = document.getElementById('btn-add-folder');
@@ -28,8 +30,91 @@ document.addEventListener('DOMContentLoaded', async () => {
   let allFolders = [];
   let allChannels = {};
   let currentSettings = {};
+  let foldersByChannelToken = new Map();
+  let searchDebounceTimer = null;
+
+  function normalizePopupHandle(h) {
+    if (!h) return '';
+    return String(h).trim().toLowerCase().replace(/^@/, '');
+  }
+
+  function rebuildPopupFolderIndex() {
+    const nextIndex = new Map();
+    const channelByToken = new Map();
+
+    if (allChannels && typeof allChannels === 'object') {
+      for (const [k, ch] of Object.entries(allChannels)) {
+        if (!ch || typeof ch !== 'object') continue;
+        if (k && k !== '__proto__' && k !== 'constructor' && k !== 'prototype') {
+          channelByToken.set(String(k).trim().toLowerCase(), ch);
+        }
+        if (ch.id) {
+          const idLower = String(ch.id).trim().toLowerCase();
+          if (idLower) channelByToken.set(idLower, ch);
+        }
+        if (ch.handle) {
+          const nh = normalizePopupHandle(ch.handle);
+          if (nh) {
+            channelByToken.set(nh, ch);
+            channelByToken.set('@' + nh, ch);
+          }
+        }
+      }
+    }
+
+    const addFolderToken = (token, folder, seenTokens) => {
+      if (!token || seenTokens.has(token)) return;
+      seenTokens.add(token);
+      let bucket = nextIndex.get(token);
+      if (!bucket) {
+        bucket = [];
+        nextIndex.set(token, bucket);
+      }
+      bucket.push(folder);
+    };
+
+    for (const f of allFolders) {
+      if (!f || !Array.isArray(f.channels) || f.channels.length === 0) continue;
+      const seenTokens = new Set();
+      for (const cid of f.channels) {
+        if (!cid) continue;
+        const cidStr = String(cid).trim();
+        if (!cidStr) continue;
+        const cidLower = cidStr.toLowerCase();
+        const cidNormH = normalizePopupHandle(cidLower);
+
+        addFolderToken(cidLower, f, seenTokens);
+        if (cidNormH) {
+          addFolderToken(cidNormH, f, seenTokens);
+          addFolderToken('@' + cidNormH, f, seenTokens);
+        }
+
+        const linkedCh = (Object.prototype.hasOwnProperty.call(allChannels, cidStr) ? allChannels[cidStr] : null) ||
+          channelByToken.get(cidLower) ||
+          (cidNormH ? channelByToken.get(cidNormH) : null);
+        if (linkedCh) {
+          if (linkedCh.id) {
+            const linkedIdLower = String(linkedCh.id).trim().toLowerCase();
+            addFolderToken(linkedIdLower, f, seenTokens);
+          }
+          if (linkedCh.handle) {
+            const linkedNh = normalizePopupHandle(linkedCh.handle);
+            if (linkedNh) {
+              addFolderToken(linkedNh, f, seenTokens);
+              addFolderToken('@' + linkedNh, f, seenTokens);
+            }
+          }
+        }
+      }
+    }
+
+    foldersByChannelToken = nextIndex;
+  }
 
   function escapeHtml(str) {
+    if (typeof YTFolderUtils !== 'undefined' && YTFolderUtils && typeof YTFolderUtils.escapeHtml === 'function') {
+      return YTFolderUtils.escapeHtml(str);
+    }
     if (!str) return '';
     return String(str)
       .replace(/&/g, '&amp;')
@@ -40,23 +125,87 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function sanitizeUrl(url) {
-    if (typeof YTFolderUtils !== 'undefined' && YTFolderUtils.sanitizeUrl) {
-      return YTFolderUtils.sanitizeUrl(url);
-    }
     if (!url) return '#';
     const trimmed = String(url).trim();
-    if (/^(?:javascript|data|vbscript):/i.test(trimmed)) {
+    if (!trimmed || trimmed === '#') return '#';
+    if (/^\/\//.test(trimmed) || /^(?:javascript|data|vbscript|blob|file):/i.test(trimmed)) {
       return '#';
     }
-    return escapeHtml(trimmed);
+    if (typeof YTFolderUtils !== 'undefined' && YTFolderUtils && typeof YTFolderUtils.sanitizeUrl === 'function') {
+      return YTFolderUtils.sanitizeUrl(trimmed);
+    }
+    if (trimmed.startsWith('/')) {
+      return escapeHtml(trimmed);
+    }
+    if (/^https?:\/\//i.test(trimmed)) {
+      try {
+        const parsed = new URL(trimmed);
+        const host = parsed.hostname.toLowerCase();
+        if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+          return escapeHtml(trimmed);
+        }
+      } catch (e) {}
+    }
+    return '#';
+  }
+
+  function sanitizeAvatarUrl(url) {
+    if (typeof YTFolderStorage !== 'undefined' && YTFolderStorage && typeof YTFolderStorage.sanitizeAvatarUrl === 'function') {
+      return YTFolderStorage.sanitizeAvatarUrl(url);
+    }
+    if (typeof YTFolderUtils !== 'undefined' && YTFolderUtils && typeof YTFolderUtils.sanitizeAvatarUrl === 'function') {
+      return YTFolderUtils.sanitizeAvatarUrl(url);
+    }
+    if (!url || typeof url !== 'string') return '';
+    let trimmed = url.trim();
+    if (/[\s<>"'`]/.test(trimmed)) return '';
+    if (/^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,[a-zA-Z0-9+/=]+$/i.test(trimmed)) {
+      return trimmed;
+    }
+    if (/^\/\/(?:yt3\.googleusercontent\.com|yt3\.ggpht\.com)\//i.test(trimmed)) {
+      trimmed = 'https:' + trimmed;
+    }
+    if (/^https?:\/\//i.test(trimmed)) {
+      try {
+        const parsed = new URL(trimmed);
+        const host = parsed.hostname.toLowerCase();
+        const allowedHosts = ['yt3.ggpht.com', 'yt3.googleusercontent.com', 'lh3.googleusercontent.com', 'ytimg.com', 'youtube.com', 'gstatic.com'];
+        if (allowedHosts.some(h => host === h || host.endsWith('.' + h))) {
+          parsed.protocol = 'https:';
+          return parsed.toString();
+        }
+      } catch (e) {}
+    }
+    return '';
+  }
+
+  async function selectFeedFolderInStorage(folderId) {
+    const nextFolderId = folderId || 'all';
+    const nextSelected = nextFolderId === 'all' ? [] : [nextFolderId];
+    const nextMuted = Array.isArray(currentSettings.mutedFeedFolderIds)
+      ? currentSettings.mutedFeedFolderIds.filter(id => id !== nextFolderId)
+      : [];
+    currentSettings.activeFeedFolderId = nextFolderId;
+    currentSettings.selectedFeedFolderIds = nextSelected;
+    currentSettings.mutedFeedFolderIds = nextMuted;
+    await YTFolderStorage.updateSettings({
+      activeFeedFolderId: nextFolderId,
+      selectedFeedFolderIds: nextSelected,
+      mutedFeedFolderIds: nextMuted
+    });
   }
 
   async function refreshData() {
-    allFolders = await YTFolderStorage.getFolders();
-    allChannels = await YTFolderStorage.getChannels();
-    currentSettings = await YTFolderStorage.getSettings();
+    const data = await YTFolderStorage.getAllData();
+    allFolders = Array.isArray(data.folders) ? data.folders : [];
+    allChannels = data.channels || {};
+    const settings = data.settings || {};
+    currentSettings = settings;
+    rebuildPopupFolderIndex();
 
-    chkHideWatched.checked = Boolean(currentSettings.hideWatched);
+    if (chkHideWatched) chkHideWatched.checked = Boolean(settings.hideWatched);
+    if (chkHideShorts) chkHideShorts.checked = !!settings.hideShorts;
+    if (chkOnlyLive) chkOnlyLive.checked = !!settings.onlyShowLive || !!settings.onlyLive;
 
     const totalAssigned = allFolders.reduce((acc, f) => acc + (f.channels?.length || 0), 0);
     statsTextEl.textContent = `${allFolders.length} 個分組 · ${totalAssigned} 頻道歸類`;
@@ -89,7 +238,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const feedBtn = card.querySelector('.folder-card-feed-btn');
         feedBtn.onclick = async (e) => {
           e.stopPropagation();
-          await YTFolderStorage.updateSettings({ activeFeedFolderId: folder.id });
+          await selectFeedFolderInStorage(folder.id);
           openOrSwitchToFeed(folder.id);
         };
 
@@ -148,7 +297,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         `;
         card.querySelector('.folder-card-feed-btn').onclick = async (e) => {
           e.stopPropagation();
-          await YTFolderStorage.updateSettings({ activeFeedFolderId: folder.id });
+          await selectFeedFolderInStorage(folder.id);
           openOrSwitchToFeed(folder.id);
         };
         card.onclick = () => {
@@ -164,18 +313,30 @@ document.addEventListener('DOMContentLoaded', async () => {
       secTitle.textContent = `📺 符合的頻道及所屬分組 (${matchedChannels.length})`;
       folderListEl.appendChild(secTitle);
 
+      const defaultAvatar = DEFAULT_AVATAR;
       matchedChannels.slice(0, 25).forEach(ch => {
-        const normHandle = (ch.handle || '').replace(/^@/, '').toLowerCase();
-        const chLower = (ch.id || '').toLowerCase();
-        const inFolders = allFolders.filter(f =>
-          f.channels && f.channels.some(cid => {
-            if (!cid) return false;
-            const cidLower = cid.toLowerCase();
-            if (chLower && cidLower === chLower) return true;
-            if (normHandle && cidLower.replace(/^@/, '') === normHandle) return true;
-            return false;
-          })
-        );
+        const normHandle = normalizePopupHandle(ch.handle);
+        const chLower = String(ch.id || '').trim().toLowerCase();
+        const byId = chLower ? foldersByChannelToken.get(chLower) : null;
+        const byHandle = normHandle
+          ? (foldersByChannelToken.get(normHandle) || foldersByChannelToken.get('@' + normHandle))
+          : null;
+
+        let inFolders = [];
+        if (byId && byHandle && byId !== byHandle) {
+          const seenFolders = new Set(byId);
+          inFolders = byId.slice();
+          for (const f of byHandle) {
+            if (!seenFolders.has(f)) {
+              seenFolders.add(f);
+              inFolders.push(f);
+            }
+          }
+        } else if (byId) {
+          inFolders = byId;
+        } else if (byHandle) {
+          inFolders = byHandle;
+        }
 
         const item = document.createElement('div');
         item.className = 'search-result-item';
@@ -189,10 +350,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           foldersHtml = `<span class="search-folder-tag unassigned">尚未加入任何分組</span>`;
         }
 
-        const defaultAvatar = DEFAULT_AVATAR;
-        const safeAvatar = (typeof YTFolderStorage !== 'undefined' && YTFolderStorage.sanitizeAvatarUrl)
-          ? (YTFolderStorage.sanitizeAvatarUrl(ch.avatarUrl) || defaultAvatar)
-          : (ch.avatarUrl || defaultAvatar);
+        const safeAvatar = sanitizeAvatarUrl(ch.avatarUrl) || defaultAvatar;
         item.innerHTML = `
           <div class="search-result-top">
             <img class="search-result-avatar" src="${escapeHtml(safeAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
@@ -216,7 +374,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           tag.onclick = async (e) => {
             e.stopPropagation();
             const fId = tag.dataset.folderId;
-            await YTFolderStorage.updateSettings({ activeFeedFolderId: fId });
+            await selectFeedFolderInStorage(fId);
             openOrSwitchToFeed(fId);
           };
         });
@@ -252,13 +410,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  searchInput.addEventListener('input', (e) => {
-    renderList(e.target.value);
+  searchInput.addEventListener('input', () => {
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+    if (searchInput.value === '') {
+      renderList('');
+      return;
+    }
+    searchDebounceTimer = setTimeout(() => {
+      searchDebounceTimer = null;
+      renderList(searchInput.value);
+    }, 100);
   });
 
   chkHideWatched.addEventListener('change', async (e) => {
     await YTFolderStorage.updateSettings({ hideWatched: e.target.checked });
   });
+
+  if (chkHideShorts) {
+    chkHideShorts.addEventListener('change', async () => {
+      await YTFolderStorage.updateSettings({ hideShorts: chkHideShorts.checked });
+    });
+  }
+
+  if (chkOnlyLive) {
+    chkOnlyLive.addEventListener('change', async () => {
+      await YTFolderStorage.updateSettings({ onlyShowLive: chkOnlyLive.checked, onlyLive: chkOnlyLive.checked });
+    });
+  }
 
   btnOpenFeed.addEventListener('click', () => {
     openOrSwitchToFeed();

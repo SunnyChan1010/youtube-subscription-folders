@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnCleanDuplicates = document.getElementById('btn-clean-duplicates');
   const btnCheckUnsubscribed = document.getElementById('btn-check-unsubscribed');
   const btnCloudSync = document.getElementById('btn-cloud-sync');
+  const btnAutoCategorize = document.getElementById('btn-auto-categorize');
 
   // Bulk Action Bar Elements
   const bulkActionBar = document.getElementById('bulk-action-bar');
@@ -96,6 +97,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const cleanupModalBtnConfirm = document.getElementById('cleanup-modal-btn-confirm');
 
   function escapeHtml(str) {
+    if (typeof YTFolderUtils !== 'undefined' && YTFolderUtils && typeof YTFolderUtils.escapeHtml === 'function') {
+      return YTFolderUtils.escapeHtml(str);
+    }
     if (!str) return '';
     return String(str)
       .replace(/&/g, '&amp;')
@@ -105,17 +109,74 @@ document.addEventListener('DOMContentLoaded', async () => {
       .replace(/'/g, '&#39;');
   }
 
+  function debounce(fn, delay = 120) {
+    let timer = null;
+    return function (...args) {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        fn.apply(this, args);
+      }, delay);
+    };
+  }
+
   function sanitizeUrl(url) {
     if (!url) return '#';
     const trimmed = String(url).trim();
-    if (/^(?:javascript|data|vbscript):/i.test(trimmed)) {
+    if (!trimmed || trimmed === '#') return '#';
+    if (/^\/\//.test(trimmed) || /^(?:javascript|data|vbscript|blob|file):/i.test(trimmed)) {
       return '#';
     }
-    return escapeHtml(trimmed);
+    if (typeof YTFolderUtils !== 'undefined' && YTFolderUtils && typeof YTFolderUtils.sanitizeUrl === 'function') {
+      return YTFolderUtils.sanitizeUrl(trimmed);
+    }
+    if (trimmed.startsWith('/')) {
+      return escapeHtml(trimmed);
+    }
+    if (/^https?:\/\//i.test(trimmed)) {
+      try {
+        const parsed = new URL(trimmed);
+        const host = parsed.hostname.toLowerCase();
+        if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+          return escapeHtml(trimmed);
+        }
+      } catch (e) {}
+    }
+    return '#';
+  }
+
+  function sanitizeAvatarUrl(url) {
+    if (typeof YTFolderStorage !== 'undefined' && YTFolderStorage && typeof YTFolderStorage.sanitizeAvatarUrl === 'function') {
+      return YTFolderStorage.sanitizeAvatarUrl(url);
+    }
+    if (typeof YTFolderUtils !== 'undefined' && YTFolderUtils && typeof YTFolderUtils.sanitizeAvatarUrl === 'function') {
+      return YTFolderUtils.sanitizeAvatarUrl(url);
+    }
+    if (!url || typeof url !== 'string') return '';
+    let trimmed = url.trim();
+    if (/[\s<>"'`]/.test(trimmed)) return '';
+    if (/^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,[a-zA-Z0-9+/=]+$/i.test(trimmed)) {
+      return trimmed;
+    }
+    if (/^\/\/(?:yt3\.googleusercontent\.com|yt3\.ggpht\.com)\//i.test(trimmed)) {
+      trimmed = 'https:' + trimmed;
+    }
+    if (/^https?:\/\//i.test(trimmed)) {
+      try {
+        const parsed = new URL(trimmed);
+        const host = parsed.hostname.toLowerCase();
+        const allowedHosts = ['yt3.ggpht.com', 'yt3.googleusercontent.com', 'lh3.googleusercontent.com', 'ytimg.com', 'youtube.com', 'gstatic.com'];
+        if (allowedHosts.some(h => host === h || host.endsWith('.' + h))) {
+          parsed.protocol = 'https:';
+          return parsed.toString();
+        }
+      } catch (e) {}
+    }
+    return '';
   }
 
   let toastTimer = null;
-  function showToast(msg, duration = 2500) {
+  function showToast(msg, typeOrDuration = 2500, customDuration) {
     let toast = document.getElementById('opt-toast');
     if (!toast) {
       toast = document.createElement('div');
@@ -124,6 +185,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       toast.style.cssText = 'position: fixed; bottom: 24px; right: 24px; background: #222; color: #fff; padding: 12px 20px; border-radius: 8px; font-size: 13.5px; z-index: 10000; box-shadow: 0 4px 16px rgba(0,0,0,0.4); opacity: 0; transition: opacity 0.3s; pointer-events: none; border-left: 4px solid #2196f3; display: flex; align-items: center; gap: 8px; max-width: 480px; line-height: 1.4;';
       document.body.appendChild(toast);
     }
+    const isStringType = typeof typeOrDuration === 'string';
+    const toastType = isStringType ? typeOrDuration : 'info';
+    const duration = typeof typeOrDuration === 'number' ? typeOrDuration : (typeof customDuration === 'number' ? customDuration : 3000);
+    toast.style.borderLeftColor = toastType === 'success' ? '#4caf50' : (toastType === 'error' ? '#ff4d4f' : '#2196f3');
     toast.textContent = msg;
     toast.style.opacity = '1';
     if (toastTimer) clearTimeout(toastTimer);
@@ -174,9 +239,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function loadData() {
-    allFolders = await YTFolderStorage.getFolders();
-    allChannels = await YTFolderStorage.getChannels();
-    uncategorizedChannels = await YTFolderStorage.getUncategorizedChannels();
+    const data = await YTFolderStorage.getAllData();
+    allFolders = Array.isArray(data.folders) ? data.folders : [];
+    allChannels = data.channels || {};
+    uncategorizedChannels = Array.isArray(data.uncategorizedChannels)
+      ? data.uncategorizedChannels
+      : await YTFolderStorage.getUncategorizedChannels();
 
     if (!activeFolderId && allFolders.length > 0) {
       activeFolderId = allFolders[0].id;
@@ -199,8 +267,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       ? allFolders.filter(f => (f.name && f.name.toLowerCase().includes(q)) || (f.icon && f.icon.toLowerCase().includes(q)) || (f.description && f.description.toLowerCase().includes(q)))
       : allFolders;
 
+    // Prebuild O(1) index lookup instead of O(F^2) findIndex per folder
+    const folderIndexMap = new Map(allFolders.map((f, idx) => [f.id, idx]));
+
     filteredFolders.forEach((folder) => {
-      const realIdx = allFolders.findIndex(f => f.id === folder.id);
+      const realIdx = folderIndexMap.get(folder.id) ?? -1;
       const count = folder.channels ? folder.channels.length : 0;
       const isActive = folder.id === activeFolderId;
 
@@ -215,8 +286,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           </div>
         </div>
         <div class="folder-item-actions">
-          <button class="btn-icon-sm btn-move-up" title="上移分組順序" ${(realIdx === 0 || q) ? 'disabled style="opacity:0.3;"' : ''}>▲</button>
-          <button class="btn-icon-sm btn-move-down" title="下移分組順序" ${(realIdx === allFolders.length - 1 || q) ? 'disabled style="opacity:0.3;"' : ''}>▼</button>
+          <button class="btn-icon-sm btn-move-up" title="上移分組順序" ${(realIdx <= 0 || q) ? 'disabled style="opacity:0.3;"' : ''}>▲</button>
+          <button class="btn-icon-sm btn-move-down" title="下移分組順序" ${(realIdx < 0 || realIdx === allFolders.length - 1 || q) ? 'disabled style="opacity:0.3;"' : ''}>▼</button>
           <button class="btn-icon-sm btn-edit" title="編輯分組">✏️</button>
           <button class="btn-icon-sm btn-delete" title="刪除分組">🗑️</button>
         </div>
@@ -241,7 +312,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       item.querySelector('.btn-move-down').onclick = async (e) => {
         e.stopPropagation();
-        if (realIdx < allFolders.length - 1) {
+        if (realIdx >= 0 && realIdx < allFolders.length - 1) {
           const temp = allFolders[realIdx];
           allFolders[realIdx] = allFolders[realIdx + 1];
           allFolders[realIdx + 1] = temp;
@@ -482,19 +553,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       updateBulkActionBar(displayed);
 
       const fragment = document.createDocumentFragment();
+      const defaultAvatar = DEFAULT_AVATAR;
+      // Hoist folder option list HTML outside channel loop: O(F) once instead of O(N * F)
+      const folderOptionsHtml = allFolders
+        .map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.icon || '📁')} ${escapeHtml(f.name)}</option>`)
+        .join('');
 
       displayed.forEach((ch, idx) => {
         const card = document.createElement('div');
         card.className = 'channel-card';
-        const defaultAvatar = DEFAULT_AVATAR;
+        const safeAvatar = sanitizeAvatarUrl(ch.avatarUrl) || defaultAvatar;
         const chKey = ch.id || ch.handle;
         const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
 
-        const folderOptions = allFolders.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.icon || '📁')} ${escapeHtml(f.name)}</option>`).join('');
-
         card.innerHTML = `
           <input type="checkbox" class="channel-card-checkbox" data-channel-key="${escapeHtml(chKey)}" ${selectedChannelKeys.has(chKey) ? 'checked' : ''} style="cursor: pointer; margin-right: 2px;" />
-          <img class="channel-card-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
+          <img class="channel-card-avatar" src="${escapeHtml(safeAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
           <div class="channel-card-info">
             <a class="channel-card-title" href="${sanitizeUrl(chUrl)}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
             <div class="channel-card-handle">${escapeHtml(ch.handle || ch.id)}</div>
@@ -502,7 +576,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           <div class="channel-card-actions">
             <select class="select-folder-assign input-text" style="padding: 4px 8px; font-size: 12px; width: 140px;">
               <option value="">＋指派分組...</option>
-              ${folderOptions}
+              ${folderOptionsHtml}
             </select>
           </div>
         `;
@@ -563,7 +637,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     headerFolderDesc.textContent = folder.description || `包含 ${folder.channels ? folder.channels.length : 0} 個頻道`;
 
     const channelIds = folder.channels || [];
-    let displayedChannels = channelIds.map(id => allChannels[id] || { id, name: id, handle: '', avatarUrl: '' });
+    let channelLookupByToken = null;
+    const getChannelLookupByToken = () => {
+      if (channelLookupByToken) return channelLookupByToken;
+      channelLookupByToken = new Map();
+      for (const [k, c] of Object.entries(allChannels)) {
+        if (!c || typeof c !== 'object') continue;
+        if (k && k !== '__proto__' && k !== 'constructor' && k !== 'prototype') {
+          channelLookupByToken.set(String(k).trim().toLowerCase(), c);
+        }
+        if (c.id) {
+          channelLookupByToken.set(String(c.id).trim().toLowerCase(), c);
+        }
+        if (c.handle) {
+          const nh = String(c.handle).trim().toLowerCase().replace(/^@/, '');
+          if (nh) {
+            channelLookupByToken.set(nh, c);
+            channelLookupByToken.set('@' + nh, c);
+          }
+        }
+      }
+      return channelLookupByToken;
+    };
+
+    let displayedChannels = channelIds.map(id => {
+      if (allChannels[id]) return allChannels[id];
+      const idStr = String(id || '').trim();
+      if (!idStr) return { id, name: id, handle: '', avatarUrl: '' };
+      const lookup = getChannelLookupByToken();
+      const idLower = idStr.toLowerCase();
+      const normH = idLower.replace(/^@/, '');
+      return lookup.get(idLower) || (normH ? lookup.get(normH) : null) || { id, name: id, handle: '', avatarUrl: '' };
+    });
 
     const query = searchQuery.trim().toLowerCase();
     if (query) {
@@ -590,28 +695,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateBulkActionBar(displayedChannels);
 
     const fragment = document.createDocumentFragment();
+    const defaultAvatar = DEFAULT_AVATAR;
+    // Hoist move option list HTML outside channel loop: O(F) once instead of O(C * F)
+    const otherFolders = allFolders.filter(f => f.id !== folder.id);
+    const hasOtherFolders = otherFolders.length > 0;
+    const moveOptionsHtml = hasOtherFolders
+      ? otherFolders.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.icon || '📁')} ${escapeHtml(f.name)}</option>`).join('')
+      : '';
 
     displayedChannels.forEach((ch, idx) => {
       const card = document.createElement('div');
       card.className = 'channel-card';
-      const defaultAvatar = DEFAULT_AVATAR;
+      const safeAvatar = sanitizeAvatarUrl(ch.avatarUrl) || defaultAvatar;
       const chKey = ch.id || ch.handle;
       const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : `https://www.youtube.com/channel/${ch.id}`;
-      const otherFolders = allFolders.filter(f => f.id !== folder.id);
-      const moveOptions = otherFolders.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.icon || '📁')} ${escapeHtml(f.name)}</option>`).join('');
 
       card.innerHTML = `
         <input type="checkbox" class="channel-card-checkbox" data-channel-key="${escapeHtml(chKey)}" ${selectedChannelKeys.has(chKey) ? 'checked' : ''} style="cursor: pointer; margin-right: 2px;" />
-        <img class="channel-card-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
+        <img class="channel-card-avatar" src="${escapeHtml(safeAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
         <div class="channel-card-info">
           <a class="channel-card-title" href="${sanitizeUrl(chUrl)}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
           <div class="channel-card-handle">${escapeHtml(ch.handle || ch.id)}</div>
         </div>
         <div class="channel-card-actions" style="display: flex; align-items: center; gap: 6px;">
-          ${otherFolders.length > 0 ? `
+          ${hasOtherFolders ? `
             <select class="select-folder-move input-text" style="padding: 4px 6px; font-size: 11.5px; width: 110px;" title="移動至其他分組">
               <option value="">移至分組...</option>
-              ${moveOptions}
+              ${moveOptionsHtml}
             </select>
           ` : ''}
           <button class="btn-icon-sm btn-remove-channel" title="自此分組移除">✕</button>
@@ -794,14 +904,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   if (inputSearchFolders) {
-    inputSearchFolders.oninput = (e) => {
+    inputSearchFolders.addEventListener('input', debounce((e) => {
       renderFolders(e.target.value);
-    };
+    }, 120));
   }
 
-  inputSearchChannels.oninput = (e) => {
-    renderActiveFolderChannels(e.target.value);
-  };
+  if (inputSearchChannels) {
+    inputSearchChannels.addEventListener('input', debounce((e) => {
+      renderActiveFolderChannels(e.target.value);
+    }, 120));
+  }
+
+  if (btnAutoCategorize) {
+    btnAutoCategorize.addEventListener('click', async () => {
+      btnAutoCategorize.disabled = true;
+      try {
+        const res = await YTFolderStorage.runAutoCategorization({ includeCategorized: false });
+        await loadData();
+        if (res && res.matchedChannelsCount > 0) {
+          showToast(`✨ 智慧歸類完成！已將 ${res.matchedChannelsCount} 個頻道歸入 ${res.affectedFolderIds.length} 個資料夾（共新增 ${res.totalAssignments} 筆歸類）`, 'success');
+        } else {
+          showToast('ℹ️ 目前沒有符合自動關鍵字的未分類頻道（請先在資料夾設定自動歸類關鍵字）', 'info');
+        }
+      } finally {
+        btnAutoCategorize.disabled = false;
+      }
+    });
+  }
 
   btnCreateFolder.onclick = openCreateFolderModal;
   btnEditActiveFolder.onclick = () => {
@@ -818,10 +947,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------------------------------------------------------
   btnExportBackup.onclick = async () => {
     try {
-      const folders = await YTFolderStorage.getFolders();
-      const channels = await YTFolderStorage.getChannels();
-      const folderCount = Array.isArray(folders) ? folders.length : 0;
-      const channelCount = channels ? Object.keys(channels).length : 0;
+      const snapshot = await YTFolderStorage.getAllData();
+      const folders = Array.isArray(snapshot.folders) ? snapshot.folders : [];
+      const channels = snapshot.channels || {};
+      const folderCount = folders.length;
+      const channelCount = Object.keys(channels).length;
 
       const jsonStr = await YTFolderStorage.exportData();
       const dateStr = new Date().toISOString().split('T')[0];
@@ -951,9 +1081,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       }
 
+      const defaultAvatar = DEFAULT_AVATAR;
       unsubscribedChannels.forEach((ch, idx) => {
         const row = document.createElement('div');
         row.className = 'unsub-channel-item';
+        const safeAvatar = sanitizeAvatarUrl(ch.avatarUrl) || defaultAvatar;
         const chKey = ch.id || ch.handle || `ch_${idx}`;
         const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : (ch.id ? `https://www.youtube.com/channel/${ch.id}` : '#');
         const foldersBadges = (ch.inFolders || []).map(fName =>
@@ -962,7 +1094,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         row.innerHTML = `
           <input type="checkbox" class="unsub-channel-checkbox" id="cleanup-chk-${idx}" />
-          <img class="unsub-channel-avatar" src="${escapeHtml(ch.avatarUrl || DEFAULT_AVATAR)}" data-default-src="${escapeHtml(DEFAULT_AVATAR)}" alt="" />
+          <img class="unsub-channel-avatar" src="${escapeHtml(safeAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
           <div class="unsub-channel-info">
             <div style="display: flex; align-items: center; justify-content: space-between;">
               <a class="unsub-channel-name" href="${sanitizeUrl(chUrl)}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
@@ -1073,10 +1205,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    // 2. Scan all channels across folders and uncategorized using O(1) Map lookup
-    const folders = await YTFolderStorage.getFolders();
-    const channels = await YTFolderStorage.getChannels();
-    const uncategorized = await YTFolderStorage.getUncategorizedChannels();
+    // 2. Scan all channels across folders and uncategorized using single-IPC snapshot + O(1) Map lookup
+    const snapshot = await YTFolderStorage.getAllData();
+    const folders = Array.isArray(snapshot.folders) ? snapshot.folders : [];
+    const channels = snapshot.channels || {};
+    const uncategorized = Array.isArray(snapshot.uncategorizedChannels)
+      ? snapshot.uncategorizedChannels
+      : await YTFolderStorage.getUncategorizedChannels();
 
     const channelByToken = new Map();
     for (const [k, c] of Object.entries(channels || {})) {
@@ -1212,12 +1347,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       redundantChannels.forEach((ch, idx) => {
         const row = document.createElement('div');
         row.className = 'unsub-channel-item';
+        const safeAvatar = sanitizeAvatarUrl(ch.avatarUrl) || defaultAvatar;
         const chKey = ch.id || ch.handle || `ch_${idx}`;
         const chUrl = ch.handle ? `https://www.youtube.com/${ch.handle}` : (ch.id ? `https://www.youtube.com/channel/${ch.id}` : '#');
 
         row.innerHTML = `
           <input type="checkbox" class="unsub-channel-checkbox" id="unsub-chk-${idx}" checked />
-          <img class="unsub-channel-avatar" src="${escapeHtml(ch.avatarUrl || defaultAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
+          <img class="unsub-channel-avatar" src="${escapeHtml(safeAvatar)}" data-default-src="${escapeHtml(defaultAvatar)}" alt="" />
           <div class="unsub-channel-info">
             <a class="unsub-channel-name" href="${sanitizeUrl(chUrl)}" target="_blank" title="在 YouTube 開啟此頻道">${escapeHtml(ch.name || ch.handle || ch.id)}</a>
             <div class="unsub-channel-handle">${escapeHtml(ch.handle ? ch.handle : (ch.id || ''))}</div>

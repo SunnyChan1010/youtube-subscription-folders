@@ -73,6 +73,24 @@ function isSystemActionTitle(title) {
   return false;
 }
 
+const ALLOWED_AVATAR_HOSTS = [
+  'yt3.ggpht.com',
+  'yt3.googleusercontent.com',
+  'lh3.googleusercontent.com',
+  'ytimg.com',
+  'youtube.com',
+  'gstatic.com'
+];
+
+function isSafeRegexPattern(pattern, flags = '') {
+  if (!pattern || typeof pattern !== 'string' || pattern.length > 120) return false;
+  if (flags && !/^[imu]{0,3}$/.test(flags)) return false;
+  if (/\([^()]*[+*?][^()]*\)\s*[+*?{]/.test(pattern) || /(\([^)]*[+*?}]\)[+*?{])|(\.\*){3,}/.test(pattern)) {
+    return false;
+  }
+  return true;
+}
+
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
@@ -86,16 +104,31 @@ function escapeHtml(str) {
 function sanitizeUrl(url) {
   if (!url) return '#';
   const trimmed = String(url).trim();
-  if (/^(?:javascript|data|vbscript):/i.test(trimmed) || /^\/\//.test(trimmed)) {
+  if (!trimmed || trimmed === '#') return '#';
+  if (/^\/\//.test(trimmed) || /^(?:javascript|data|vbscript|blob|file):/i.test(trimmed)) {
     return '#';
   }
-  return escapeHtml(trimmed);
+  if (trimmed.startsWith('/')) {
+    return escapeHtml(trimmed);
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.username || parsed.password) return '#';
+      const host = parsed.hostname.toLowerCase();
+      if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+        return escapeHtml(trimmed);
+      }
+    } catch (e) {}
+    return '#';
+  }
+  return '#';
 }
 
 function sanitizeAvatarUrl(url) {
   if (!url || typeof url !== 'string') return '';
   let trimmed = url.trim();
-  if (/[\s<>"'`]/.test(trimmed)) return '';
+  if (!trimmed || /[\s<>"'`]/.test(trimmed)) return '';
   if (/^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,[a-zA-Z0-9+/=]+$/i.test(trimmed)) {
     return trimmed;
   }
@@ -105,8 +138,13 @@ function sanitizeAvatarUrl(url) {
   if (/^https?:\/\//i.test(trimmed)) {
     try {
       const parsed = new URL(trimmed);
+      if (parsed.username || parsed.password) return '';
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-        return trimmed;
+        const host = parsed.hostname.toLowerCase();
+        if (ALLOWED_AVATAR_HOSTS.some(h => host === h || host.endsWith('.' + h))) {
+          parsed.protocol = 'https:';
+          return parsed.toString();
+        }
       }
     } catch (e) {}
   }
@@ -169,6 +207,8 @@ function normalizeHandle(h) {
 }
 
 const YTFolderUtils = {
+  ALLOWED_AVATAR_HOSTS,
+  isSafeRegexPattern,
   escapeHtml,
   sanitizeUrl,
   sanitizeAvatarUrl,
@@ -183,6 +223,8 @@ if (typeof globalThis !== 'undefined') {
   globalThis.YT_INITIAL_DATA = YT_INITIAL_DATA;
   globalThis.YT_DEFAULT_AVATAR = YT_DEFAULT_AVATAR;
   globalThis.YT_INVALID_CHANNEL_TITLES = YT_INVALID_CHANNEL_TITLES;
+  globalThis.ALLOWED_AVATAR_HOSTS = ALLOWED_AVATAR_HOSTS;
+  globalThis.isSafeRegexPattern = isSafeRegexPattern;
   globalThis.isSystemActionTitle = isSystemActionTitle;
   globalThis.YTFolderUtils = YTFolderUtils;
 }
@@ -192,6 +234,8 @@ if (typeof module !== 'undefined') {
   module.exports.YT_INITIAL_DATA = YT_INITIAL_DATA;
   module.exports.YT_DEFAULT_AVATAR = YT_DEFAULT_AVATAR;
   module.exports.YT_INVALID_CHANNEL_TITLES = YT_INVALID_CHANNEL_TITLES;
+  module.exports.ALLOWED_AVATAR_HOSTS = ALLOWED_AVATAR_HOSTS;
+  module.exports.isSafeRegexPattern = isSafeRegexPattern;
   module.exports.isSystemActionTitle = isSystemActionTitle;
   module.exports.YTFolderUtils = YTFolderUtils;
 }

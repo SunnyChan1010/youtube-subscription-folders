@@ -8,6 +8,10 @@
  * [Rule 4] Zero hardcoded API keys, tokens, or static credentials
  * [Rule 5] Git privacy boundary (docs, audits, and agent rules never tracked)
  * [Rule 6] Release & version consistency across manifest, package, and changelog
+ * [Rule 7] Security hardening: anti-malware, zero XSS & strict origin boundary
+ * [Rule 8] Performance guard: zero runaway polling & mutation batching
+ * [Rule 9] v1.4.0 integrity: smart auto-categorization & pagination passthrough
+ * [Rule 10] AppSec hardening: ReDoS guard, avatar host allowlist & fail-closed IPC
  */
 
 const fs = require('fs');
@@ -333,6 +337,60 @@ if (contentJsContent.includes('setupFeedObserver')) {
 const monitorFnMatch = contentJsContent.match(/async function monitorChannelSubscribeButtonState\(\)[\s\S]*?^  \}/m);
 if (monitorFnMatch && monitorFnMatch[0].includes('YTFolderStorage.getFoldersByChannel')) {
   recordError('Rule 8 - Performance', 'scripts/content.js', null, 'monitorChannelSubscribeButtonState must NOT invoke YTFolderStorage.getFoldersByChannel (disk I/O loop). Use memory cache getCachedFolderIdsByChannel.');
+}
+
+if (!storageJsContent.includes('getCompiledSafeRegex')) {
+  recordError('Rule 8 - Performance', 'scripts/storage.js', null, 'storage.js must memoize compiled safe RegExp instances via getCompiledSafeRegex.');
+}
+
+if (!storageJsContent.includes('computeUncategorizedChannels')) {
+  recordError('Rule 8 - Performance', 'scripts/storage.js', null, 'storage.js must compute uncategorized channels in memory via computeUncategorizedChannels without redundant Storage IPC reads.');
+}
+
+if (!contentJsContent.includes('rebuildInMemoryIndices')) {
+  recordError('Rule 8 - Performance', 'scripts/content.js', null, 'content.js must maintain O(1) in-memory reverse indices via rebuildInMemoryIndices.');
+}
+
+// ---------------------------------------------------------------------------
+// [Rule 9] v1.4.0 Integrity: Smart Auto-Categorization & Pagination Passthrough
+// ---------------------------------------------------------------------------
+console.log('▶ [Rule 9] Checking v1.4.0 integrity (runAutoCategorization & isComplete passthrough)...');
+
+if (!storageJsContent.includes('runAutoCategorization')) {
+  recordError('Rule 9 - v1.4.0 Integrity', 'scripts/storage.js', null, 'storage.js must implement and export runAutoCategorization.');
+}
+
+if (!contentJsContent.includes('isComplete')) {
+  recordError('Rule 9 - v1.4.0 Integrity', 'scripts/content.js', null, 'content.js must preserve isComplete flag in EXEC_FETCH_SUBSCRIBED_CHANNELS response.');
+}
+
+// ---------------------------------------------------------------------------
+// [Rule 10] AppSec Hardening
+// ---------------------------------------------------------------------------
+console.log('▶ [Rule 10] Checking AppSec hardening (isSafeRegexPattern, ALLOWED_AVATAR_HOSTS & fail-closed IPC)...');
+
+const initDataJsContent = fs.existsSync(initialDataPath) ? fs.readFileSync(initialDataPath, 'utf8') : '';
+
+if (!initDataJsContent.includes('isSafeRegexPattern')) {
+  recordError('Rule 10 - AppSec Hardening', 'scripts/initial_data.js', null, 'initial_data.js must define and export isSafeRegexPattern.');
+}
+if (!storageJsContent.includes('isSafeRegexPattern')) {
+  recordError('Rule 10 - AppSec Hardening', 'scripts/storage.js', null, 'storage.js must define and enforce isSafeRegexPattern.');
+}
+
+if (!initDataJsContent.includes('ALLOWED_AVATAR_HOSTS')) {
+  recordError('Rule 10 - AppSec Hardening', 'scripts/initial_data.js', null, 'initial_data.js must define ALLOWED_AVATAR_HOSTS.');
+}
+if (!storageJsContent.includes('ALLOWED_AVATAR_HOSTS')) {
+  recordError('Rule 10 - AppSec Hardening', 'scripts/storage.js', null, 'storage.js must define ALLOWED_AVATAR_HOSTS.');
+}
+
+if (/if\s*\(\s*sender\s*&&\s*sender\.id\s*&&/.test(contentJsContent) || contentJsContent.includes('if (sender && sender.id &&')) {
+  recordError('Rule 10 - AppSec Hardening', 'scripts/content.js', null, 'content.js must NOT contain fail-open sender check "if (sender && sender.id &&".');
+}
+
+if (!/(!sender\s*\|\|\s*sender\.id\s*!==\s*chrome\.runtime\.id|sender\?\.id\s*!==\s*chrome\.runtime\.id)/.test(contentJsContent)) {
+  recordError('Rule 10 - AppSec Hardening', 'scripts/content.js', null, 'content.js must enforce fail-closed sender verification (!sender || sender.id !== chrome.runtime.id or sender?.id !== chrome.runtime.id).');
 }
 
 // ---------------------------------------------------------------------------
